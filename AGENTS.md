@@ -125,6 +125,10 @@ When all devices are powered, `probe` should expect:
 
 An ACK proves only that an address responds. Use identity/self-test checks where available.
 
+An external SVM41 module also uses I2C address `0x6A`. Never connect it to the
+same I2C bus as the H2S MCP3421. For the dedicated NH3/H2S/SVM41 mode, keep
+both MCP3421 devices on I2C and connect SVM41 over UART/SHDLC at 115200 baud.
+
 ## TGS board
 
 ### ADS7828 channel mapping
@@ -263,6 +267,8 @@ src/enose/
   sht45.py
   sgp41.py
   bme690.py
+  svm41_uart.py
+  svm41_acquisition.py
 tests/
 data/raw/
 ```
@@ -277,11 +283,13 @@ Implement:
 python -m enose probe --config config/rpi5.toml
 python -m enose diagnose --config config/rpi5.toml
 python -m enose acquire --config config/rpi5.toml
+python -m enose acquire-svm41 --config config/rpi5.toml --uart /dev/ttyUSB0
 ```
 
 - `probe`: check expected addresses and identities; concise table.
 - `diagnose`: one complete read from enabled devices; detailed bytes only with `--verbose`.
 - `acquire`: continuous time-series recording; default one frame per second.
+- `acquire-svm41`: isolated 1 Hz NH3/H2S I2C plus SVM41 UART recording until Ctrl+C.
 
 Required devices may fail the command. Optional device failures must be reported without blocking the remaining sensors.
 

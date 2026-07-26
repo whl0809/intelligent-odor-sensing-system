@@ -36,3 +36,56 @@ do not stop the other sensors.
 Sensirion's official `sensirion-gas-index-algorithm` package processes each
 new 1 Hz SGP41 raw sample into VOC Index and NOx Index while preserving both
 raw signals. These indices are not ppm or concentration measurements.
+
+## NH3, H2S, and SVM41 UART mode
+
+The isolated `acquire-svm41` mode records only the two existing MCP3421
+channels and a Sensirion SVM41 module:
+
+```bash
+python -m enose acquire-svm41 \
+  --config config/rpi5.toml \
+  --uart /dev/ttyUSB0
+```
+
+It runs continuously at 1 Hz until Ctrl+C, prints every frame, and writes a
+timestamped `enose_nh3_h2s_svm41_*.csv` plus metadata in `data/raw/`.
+VOC Index and NOx Index are dimensionless indices, not ppm or concentration.
+
+Keep NH3 (`0x69`) and H2S (`0x6A`) on `/dev/i2c-1`. The SVM41 module also uses
+`0x6A` in I2C mode, so it must not be connected to that I2C bus. Connect the
+SVM41 through its Sensirion USB-UART cable instead:
+
+- SVM41 pin 1/red: VDD, 3.3 V or 5 V
+- SVM41 pin 2/black: GND
+- SVM41 pin 3/green: module RX
+- SVM41 pin 4/yellow: module TX
+- SVM41 pin 5/blue: SEL, leave floating or pull to VDD for UART
+- SVM41 pin 6/purple: do not connect
+
+With the provided USB-UART cable, plug the cable into the Raspberry Pi and
+confirm its device name:
+
+```bash
+ls -l /dev/ttyUSB*
+sudo usermod -aG dialout "$USER"
+```
+
+Log out and back in after changing group membership. If Linux assigns a
+different serial path, pass that path with `--uart`. Install the new official
+driver dependency after pulling this change:
+
+```bash
+source .venv/bin/activate
+python -m pip install -e .
+```
+
+If the Raspberry Pi's configured piwheels mirror times out, install from PyPI
+without the global pip configuration:
+
+```bash
+PIP_CONFIG_FILE=/dev/null \
+PIP_INDEX_URL=https://pypi.org/simple \
+PIP_DEFAULT_TIMEOUT=120 \
+python -m pip install -e .
+```

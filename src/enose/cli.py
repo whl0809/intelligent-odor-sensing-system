@@ -15,6 +15,7 @@ from .i2c_bus import DriverError, I2CBus
 from .mcp3421 import MCP3421
 from .sgp41 import SGP41
 from .sht45 import SHT45
+from .svm41_acquisition import run_svm41_acquisition
 
 LOGGER = logging.getLogger(__name__)
 
@@ -28,6 +29,10 @@ def _parser() -> argparse.ArgumentParser:
         command.add_argument("--verbose", action="store_true")
         if name == "acquire":
             command.add_argument("--frames", type=int)
+    svm41 = subparsers.add_parser("acquire-svm41")
+    svm41.add_argument("--config", required=True, type=Path)
+    svm41.add_argument("--uart", default="/dev/ttyUSB0")
+    svm41.add_argument("--verbose", action="store_true")
     return parser
 
 
@@ -183,6 +188,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     try:
         config = load_config(args.config)
+        if args.command == "acquire-svm41":
+            try:
+                run_svm41_acquisition(config, args.uart)
+            except KeyboardInterrupt:
+                print("acquisition stopped", file=sys.stderr)
+                return 130
+            return 0
         with I2CBus(config.acquisition.bus) as bus:
             sensors = build_sensors(config, bus)
             if args.command == "probe":
