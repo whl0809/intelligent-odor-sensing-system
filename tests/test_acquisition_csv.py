@@ -8,11 +8,11 @@ import pytest
 
 import enose.acquisition as acquisition_module
 from enose.acquisition import Acquisition, Sensors
-from enose.cli import _format_frame, _parser, _without_sgp41_and_bme690
+from enose.cli import _format_frame, _parser, _without_sgp41_bme690_sht45
 from enose.config import load_config
 from enose.csv_logger import (
     CSV_COLUMNS,
-    NO_SGP41_BME690_CSV_COLUMNS,
+    NO_SGP41_BME690_SHT45_CSV_COLUMNS,
     CSVLogger,
     frame_to_row,
 )
@@ -285,27 +285,29 @@ def test_terminal_format_uses_csv_order_and_marks_missing_values() -> None:
     assert fields[-1] == "error_codes=sgp41_nack"
 
 
-def test_no_sgp41_mode_disables_sgp41_and_bme690() -> None:
+def test_reduced_mode_disables_sgp41_bme690_and_sht45() -> None:
     config = _test_config()
 
-    result = _without_sgp41_and_bme690(config)
+    result = _without_sgp41_bme690_sht45(config)
 
     assert result.sgp41.enabled is False
     assert result.sgp41.required is False
     assert result.bme690.enabled is False
     assert result.bme690.required is False
-    assert result.sht45 == config.sht45
+    assert result.sht45.enabled is False
+    assert result.sht45.required is False
     assert result.ads7828 == config.ads7828
     assert result.nh3 == config.nh3
     assert result.h2s == config.h2s
     assert config.sgp41.enabled is True
     assert config.bme690.enabled is True
+    assert config.sht45.enabled is True
 
 
-def test_no_sgp41_bme690_command_name_replaces_old_name() -> None:
+def test_reduced_mode_command_name_replaces_old_name() -> None:
     args = _parser().parse_args(
         [
-            "acquire-no-sgp41-bme690",
+            "acquire-no-sgp41-bme690-sht45",
             "--config",
             "config/rpi5.toml",
             "--frames",
@@ -313,21 +315,21 @@ def test_no_sgp41_bme690_command_name_replaces_old_name() -> None:
         ]
     )
 
-    assert args.command == "acquire-no-sgp41-bme690"
+    assert args.command == "acquire-no-sgp41-bme690-sht45"
     with pytest.raises(SystemExit):
         _parser().parse_args(
-            ["acquire-no-sgp41", "--config", "config/rpi5.toml"]
+            ["acquire-no-sgp41-bme690", "--config", "config/rpi5.toml"]
         )
 
 
-def test_no_sgp41_mode_omits_sgp41_and_bme690_from_output(tmp_path) -> None:
+def test_reduced_mode_omits_disabled_sensors_from_output(tmp_path) -> None:
     frame = Frame(
         timestamp_utc="2026-01-01T00:00:00.000Z",
         elapsed_s=0.0,
         sequence=0,
         frame_duration_ms=1.0,
         deadline_miss_ms=0.0,
-        sht45=None,
+        sht45=SHT45Sample(22.0, 40.0),
         ads7828=None,
         nh3=None,
         h2s=None,
@@ -336,25 +338,26 @@ def test_no_sgp41_mode_omits_sgp41_and_bme690_from_output(tmp_path) -> None:
         error_codes=(),
     )
 
-    terminal_line = _format_frame(frame, NO_SGP41_BME690_CSV_COLUMNS)
+    terminal_line = _format_frame(frame, NO_SGP41_BME690_SHT45_CSV_COLUMNS)
     assert "sgp41" not in terminal_line
     assert "bme690" not in terminal_line
+    assert "sht45" not in terminal_line
 
     with CSVLogger(
         tmp_path,
         {"schema_version": 1},
         ["sht45"],
         flush_rows=1,
-        columns=NO_SGP41_BME690_CSV_COLUMNS,
+        columns=NO_SGP41_BME690_SHT45_CSV_COLUMNS,
     ) as logger:
         logger.write(frame)
         csv_path = logger.path
 
     with csv_path.open(newline="", encoding="utf-8") as handle:
         reader = csv.DictReader(handle)
-        assert tuple(reader.fieldnames or ()) == NO_SGP41_BME690_CSV_COLUMNS
+        assert tuple(reader.fieldnames or ()) == NO_SGP41_BME690_SHT45_CSV_COLUMNS
         next(reader)
     assert not any(
-        column.startswith(("sgp41_", "bme690_"))
-        for column in NO_SGP41_BME690_CSV_COLUMNS
+        column.startswith(("sgp41_", "bme690_", "sht45_"))
+        for column in NO_SGP41_BME690_SHT45_CSV_COLUMNS
     )

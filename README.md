@@ -22,7 +22,7 @@ python -m pip install -e .
 python -m enose probe --config config/rpi5.toml
 python -m enose diagnose --config config/rpi5.toml
 python -m enose acquire --config config/rpi5.toml
-python -m enose acquire-no-sgp41-bme690 --config config/rpi5.toml
+python -m enose acquire-no-sgp41-bme690-sht45 --config config/rpi5.toml
 ```
 
 Use `--verbose` after the subcommand for byte-level diagnostics. A bounded
@@ -30,9 +30,10 @@ acquisition can be run with `--frames 60`.
 
 Both standard acquisition commands print every CSV field for each frame while
 writing the same frame to disk. `acquire` uses all enabled sensors on both
-PCBs. `acquire-no-sgp41-bme690` records only SHT45, all six TGS/ADS7828
-channels, NH3, and H2S. It disables both SGP41 and BME690; neither device
-appears in that mode's terminal rows or CSV columns, and no SVM41 is used.
+PCBs. `acquire-no-sgp41-bme690-sht45` records only all six TGS/ADS7828
+channels, NH3, and H2S. It disables SGP41, BME690, and SHT45; those devices
+do not appear in that mode's terminal rows or CSV columns, and no SVM41 is
+used.
 
 The BME690 driver uses Bosch Sensortec's official BME690 SensorAPI v1.1.0
 through a small native extension built during installation. It runs the sensor

@@ -13,7 +13,7 @@ from .bme690 import BME690
 from .config import AppConfig, DeviceConfig, load_config
 from .csv_logger import (
     CSV_COLUMNS,
-    NO_SGP41_BME690_CSV_COLUMNS,
+    NO_SGP41_BME690_SHT45_CSV_COLUMNS,
     CSVLogger,
     frame_to_row,
 )
@@ -34,12 +34,12 @@ def _parser() -> argparse.ArgumentParser:
         "probe",
         "diagnose",
         "acquire",
-        "acquire-no-sgp41-bme690",
+        "acquire-no-sgp41-bme690-sht45",
     ):
         command = subparsers.add_parser(name)
         command.add_argument("--config", required=True, type=Path)
         command.add_argument("--verbose", action="store_true")
-        if name in ("acquire", "acquire-no-sgp41-bme690"):
+        if name in ("acquire", "acquire-no-sgp41-bme690-sht45"):
             command.add_argument("--frames", type=int)
     svm41 = subparsers.add_parser("acquire-svm41")
     svm41.add_argument("--config", required=True, type=Path)
@@ -153,11 +153,12 @@ def _required_sample_failed(config: AppConfig, row: dict[str, object]) -> bool:
     )
 
 
-def _without_sgp41_and_bme690(config: AppConfig) -> AppConfig:
+def _without_sgp41_bme690_sht45(config: AppConfig) -> AppConfig:
     return replace(
         config,
         sgp41=replace(config.sgp41, enabled=False, required=False),
         bme690=replace(config.bme690, enabled=False, required=False),
+        sht45=replace(config.sht45, enabled=False, required=False),
     )
 
 
@@ -235,8 +236,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print("acquisition stopped", file=sys.stderr)
                 return 130
             return 0
-        if args.command == "acquire-no-sgp41-bme690":
-            config = _without_sgp41_and_bme690(config)
+        if args.command == "acquire-no-sgp41-bme690-sht45":
+            config = _without_sgp41_bme690_sht45(config)
         with I2CBus(config.acquisition.bus) as bus:
             sensors = build_sensors(config, bus)
             if args.command == "probe":
@@ -244,8 +245,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             if args.command == "diagnose":
                 return _diagnose(config, sensors)
             columns = (
-                NO_SGP41_BME690_CSV_COLUMNS
-                if args.command == "acquire-no-sgp41-bme690"
+                NO_SGP41_BME690_SHT45_CSV_COLUMNS
+                if args.command == "acquire-no-sgp41-bme690-sht45"
                 else CSV_COLUMNS
             )
             return _acquire(config, sensors, args.frames, columns)

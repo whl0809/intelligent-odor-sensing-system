@@ -55,10 +55,10 @@ CSV_COLUMNS = (
     "bme690_ok",
     "error_codes",
 )
-NO_SGP41_BME690_CSV_COLUMNS = tuple(
+NO_SGP41_BME690_SHT45_CSV_COLUMNS = tuple(
     column
     for column in CSV_COLUMNS
-    if not column.startswith(("sgp41_", "bme690_"))
+    if not column.startswith(("sgp41_", "bme690_", "sht45_"))
 )
 
 
