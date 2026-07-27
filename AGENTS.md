@@ -283,12 +283,16 @@ Implement:
 python -m enose probe --config config/rpi5.toml
 python -m enose diagnose --config config/rpi5.toml
 python -m enose acquire --config config/rpi5.toml
+python -m enose acquire-no-sgp41-bme690 --config config/rpi5.toml
 python -m enose acquire-svm41 --config config/rpi5.toml --uart /dev/ttyUSB0
 ```
 
 - `probe`: check expected addresses and identities; concise table.
 - `diagnose`: one complete read from enabled devices; detailed bytes only with `--verbose`.
-- `acquire`: continuous time-series recording; default one frame per second.
+- `acquire`: continuous time-series recording and terminal output; default one frame per second.
+- `acquire-no-sgp41-bme690`: records SHT45, ADS7828/TGS, NH3, and H2S only.
+  SGP41 and BME690 are disabled and omitted from terminal and CSV output; no
+  SVM41.
 - `acquire-svm41`: isolated 1 Hz NH3/H2S I2C plus SVM41 UART recording until Ctrl+C.
 
 Required devices may fail the command. Optional device failures must be reported without blocking the remaining sensors.

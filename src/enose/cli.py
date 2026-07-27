@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 import logging
 from pathlib import Path
 import sys
@@ -10,9 +11,15 @@ from .acquisition import Acquisition, Sensors
 from .ads7828 import ADS7828
 from .bme690 import BME690
 from .config import AppConfig, DeviceConfig, load_config
-from .csv_logger import CSVLogger, frame_to_row
+from .csv_logger import (
+    CSV_COLUMNS,
+    NO_SGP41_BME690_CSV_COLUMNS,
+    CSVLogger,
+    frame_to_row,
+)
 from .i2c_bus import DriverError, I2CBus
 from .mcp3421 import MCP3421
+from .records import Frame
 from .sgp41 import SGP41
 from .sht45 import SHT45
 from .svm41_acquisition import run_svm41_acquisition
@@ -23,11 +30,16 @@ LOGGER = logging.getLogger(__name__)
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m enose")
     subparsers = parser.add_subparsers(dest="command", required=True)
-    for name in ("probe", "diagnose", "acquire"):
+    for name in (
+        "probe",
+        "diagnose",
+        "acquire",
+        "acquire-no-sgp41-bme690",
+    ):
         command = subparsers.add_parser(name)
         command.add_argument("--config", required=True, type=Path)
         command.add_argument("--verbose", action="store_true")
-        if name == "acquire":
+        if name in ("acquire", "acquire-no-sgp41-bme690"):
             command.add_argument("--frames", type=int)
     svm41 = subparsers.add_parser("acquire-svm41")
     svm41.add_argument("--config", required=True, type=Path)
@@ -141,6 +153,28 @@ def _required_sample_failed(config: AppConfig, row: dict[str, object]) -> bool:
     )
 
 
+def _without_sgp41_and_bme690(config: AppConfig) -> AppConfig:
+    return replace(
+        config,
+        sgp41=replace(config.sgp41, enabled=False, required=False),
+        bme690=replace(config.bme690, enabled=False, required=False),
+    )
+
+
+def _format_frame(
+    frame: Frame,
+    columns: tuple[str, ...] = CSV_COLUMNS,
+) -> str:
+    row = frame_to_row(frame)
+    return " ".join(
+        f"{name}={'-' if row[name] == '' else row[name]}" for name in columns
+    )
+
+
+def _print_frame(frame: Frame, columns: tuple[str, ...] = CSV_COLUMNS) -> None:
+    print(_format_frame(frame, columns), flush=True)
+
+
 def _diagnose(config: AppConfig, sensors: Sensors) -> int:
     acquisition = Acquisition(config, sensors)
     try:
@@ -159,6 +193,7 @@ def _acquire(
     config: AppConfig,
     sensors: Sensors,
     max_frames: int | None,
+    columns: tuple[str, ...] = CSV_COLUMNS,
 ) -> int:
     if max_frames is not None and max_frames < 1:
         raise ValueError("--frames must be at least 1")
@@ -168,11 +203,16 @@ def _acquire(
         effective_config=config.as_dict(),
         enabled_devices=enabled,
         flush_rows=config.acquisition.flush_rows,
+        columns=columns,
     ) as csv_logger:
         print(f"writing {csv_logger.path}")
         acquisition = Acquisition(config, sensors)
         try:
-            count = acquisition.run(csv_logger, max_frames=max_frames)
+            count = acquisition.run(
+                csv_logger,
+                max_frames=max_frames,
+                on_frame=lambda frame: _print_frame(frame, columns),
+            )
         except KeyboardInterrupt:
             print("acquisition stopped", file=sys.stderr)
             return 130
@@ -195,13 +235,20 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print("acquisition stopped", file=sys.stderr)
                 return 130
             return 0
+        if args.command == "acquire-no-sgp41-bme690":
+            config = _without_sgp41_and_bme690(config)
         with I2CBus(config.acquisition.bus) as bus:
             sensors = build_sensors(config, bus)
             if args.command == "probe":
                 return _probe(config, bus, sensors)
             if args.command == "diagnose":
                 return _diagnose(config, sensors)
-            return _acquire(config, sensors, args.frames)
+            columns = (
+                NO_SGP41_BME690_CSV_COLUMNS
+                if args.command == "acquire-no-sgp41-bme690"
+                else CSV_COLUMNS
+            )
+            return _acquire(config, sensors, args.frames, columns)
     except ValueError as exc:
         LOGGER.error("%s", exc)
         return 2

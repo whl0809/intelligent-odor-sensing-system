@@ -55,6 +55,11 @@ CSV_COLUMNS = (
     "bme690_ok",
     "error_codes",
 )
+NO_SGP41_BME690_CSV_COLUMNS = tuple(
+    column
+    for column in CSV_COLUMNS
+    if not column.startswith(("sgp41_", "bme690_"))
+)
 
 
 def frame_to_row(frame: Frame) -> dict[str, object]:
@@ -129,6 +134,7 @@ class CSVLogger:
     enabled_devices: list[str]
     flush_rows: int = 10
     start_time: datetime | None = None
+    columns: tuple[str, ...] = CSV_COLUMNS
 
     def __post_init__(self) -> None:
         self.output_dir = Path(self.output_dir)
@@ -139,7 +145,7 @@ class CSVLogger:
         self.path = self.output_dir / f"{stem}.csv"
         self.metadata_path = self.output_dir / f"{stem}.metadata.json"
         self._handle = self.path.open("x", newline="", encoding="utf-8")
-        self._writer = csv.DictWriter(self._handle, fieldnames=CSV_COLUMNS)
+        self._writer = csv.DictWriter(self._handle, fieldnames=self.columns)
         self._writer.writeheader()
         self._rows_since_flush = 0
         metadata = {
@@ -155,7 +161,8 @@ class CSVLogger:
             metadata_handle.write("\n")
 
     def write(self, frame: Frame) -> None:
-        self._writer.writerow(frame_to_row(frame))
+        row = frame_to_row(frame)
+        self._writer.writerow({column: row[column] for column in self.columns})
         self._rows_since_flush += 1
         if self._rows_since_flush >= self.flush_rows:
             self.flush()
@@ -174,4 +181,3 @@ class CSVLogger:
 
     def __exit__(self, *_: object) -> None:
         self.close()
-

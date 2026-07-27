@@ -8,9 +8,15 @@ import pytest
 
 import enose.acquisition as acquisition_module
 from enose.acquisition import Acquisition, Sensors
+from enose.cli import _format_frame, _parser, _without_sgp41_and_bme690
 from enose.config import load_config
-from enose.csv_logger import CSV_COLUMNS, CSVLogger, frame_to_row
-from enose.records import Frame, SGP41Sample, SHT45Sample
+from enose.csv_logger import (
+    CSV_COLUMNS,
+    NO_SGP41_BME690_CSV_COLUMNS,
+    CSVLogger,
+    frame_to_row,
+)
+from enose.records import BME690Sample, Frame, SGP41Sample, SHT45Sample
 from conftest import FakeClock
 
 
@@ -191,6 +197,7 @@ def test_absolute_deadline_scheduler_and_shutdown() -> None:
     clock = FakeClock()
     sgp41 = StubSGP41()
     logger = MemoryLogger()
+    terminal_frames: list[Frame] = []
     acquisition = Acquisition(
         config,
         Sensors(sgp41=sgp41),
@@ -199,7 +206,7 @@ def test_absolute_deadline_scheduler_and_shutdown() -> None:
         utcnow_fn=lambda: datetime(2026, 1, 1, tzinfo=UTC),
     )
 
-    count = acquisition.run(logger, max_frames=3)
+    count = acquisition.run(logger, max_frames=3, on_frame=terminal_frames.append)
 
     assert count == 3
     assert [frame.elapsed_s for frame in logger.frames] == [0.0, 1.0, 2.0]
@@ -207,6 +214,7 @@ def test_absolute_deadline_scheduler_and_shutdown() -> None:
     assert clock.value == 2.0
     assert logger.flushed
     assert sgp41.heater_was_turned_off
+    assert terminal_frames == logger.frames
 
 
 def test_initialization_failure_flushes_and_turns_off_heater() -> None:
@@ -250,3 +258,103 @@ def test_stable_csv_header_and_sidecar(tmp_path) -> None:
     assert row["sht45_ok"] == "False"
     assert row["error_codes"] == "sht45_crc"
     assert metadata_path.exists()
+
+
+def test_terminal_format_uses_csv_order_and_marks_missing_values() -> None:
+    frame = Frame(
+        timestamp_utc="2026-01-01T00:00:00.000Z",
+        elapsed_s=0.0,
+        sequence=0,
+        frame_duration_ms=1.0,
+        deadline_miss_ms=0.0,
+        sht45=None,
+        ads7828=None,
+        nh3=None,
+        h2s=None,
+        sgp41=None,
+        bme690=None,
+        error_codes=("sgp41_nack",),
+    )
+
+    fields = _format_frame(frame).split()
+
+    assert len(fields) == len(CSV_COLUMNS)
+    assert fields[0] == "timestamp_utc=2026-01-01T00:00:00.000Z"
+    assert "sgp41_sraw_voc=-" in fields
+    assert "bme690_temperature_c=-" in fields
+    assert fields[-1] == "error_codes=sgp41_nack"
+
+
+def test_no_sgp41_mode_disables_sgp41_and_bme690() -> None:
+    config = _test_config()
+
+    result = _without_sgp41_and_bme690(config)
+
+    assert result.sgp41.enabled is False
+    assert result.sgp41.required is False
+    assert result.bme690.enabled is False
+    assert result.bme690.required is False
+    assert result.sht45 == config.sht45
+    assert result.ads7828 == config.ads7828
+    assert result.nh3 == config.nh3
+    assert result.h2s == config.h2s
+    assert config.sgp41.enabled is True
+    assert config.bme690.enabled is True
+
+
+def test_no_sgp41_bme690_command_name_replaces_old_name() -> None:
+    args = _parser().parse_args(
+        [
+            "acquire-no-sgp41-bme690",
+            "--config",
+            "config/rpi5.toml",
+            "--frames",
+            "1",
+        ]
+    )
+
+    assert args.command == "acquire-no-sgp41-bme690"
+    with pytest.raises(SystemExit):
+        _parser().parse_args(
+            ["acquire-no-sgp41", "--config", "config/rpi5.toml"]
+        )
+
+
+def test_no_sgp41_mode_omits_sgp41_and_bme690_from_output(tmp_path) -> None:
+    frame = Frame(
+        timestamp_utc="2026-01-01T00:00:00.000Z",
+        elapsed_s=0.0,
+        sequence=0,
+        frame_duration_ms=1.0,
+        deadline_miss_ms=0.0,
+        sht45=None,
+        ads7828=None,
+        nh3=None,
+        h2s=None,
+        sgp41=SGP41Sample(100, 200, True, 101.0, 2.0),
+        bme690=BME690Sample(22.0, 40.0, 101325.0, 50000.0, True, True),
+        error_codes=(),
+    )
+
+    terminal_line = _format_frame(frame, NO_SGP41_BME690_CSV_COLUMNS)
+    assert "sgp41" not in terminal_line
+    assert "bme690" not in terminal_line
+
+    with CSVLogger(
+        tmp_path,
+        {"schema_version": 1},
+        ["sht45"],
+        flush_rows=1,
+        columns=NO_SGP41_BME690_CSV_COLUMNS,
+    ) as logger:
+        logger.write(frame)
+        csv_path = logger.path
+
+    with csv_path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        assert tuple(reader.fieldnames or ()) == NO_SGP41_BME690_CSV_COLUMNS
+        next(reader)
+    assert not any(
+        column.startswith(("sgp41_", "bme690_"))
+        for column in NO_SGP41_BME690_CSV_COLUMNS
+    )

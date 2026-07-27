@@ -257,7 +257,12 @@ class Acquisition:
             except Exception:
                 LOGGER.exception("failed to turn off SGP41 heater")
 
-    def run(self, logger: CSVLogger, max_frames: int | None = None) -> int:
+    def run(
+        self,
+        logger: CSVLogger,
+        max_frames: int | None = None,
+        on_frame: Callable[[Frame], None] | None = None,
+    ) -> int:
         sequence = 0
         try:
             self.initialize()
@@ -269,6 +274,8 @@ class Acquisition:
                     self._sleep(wait_s)
                 frame = self.read_frame(sequence, run_start, deadline)
                 logger.write(frame)
+                if on_frame is not None:
+                    on_frame(frame)
                 sequence += 1
         finally:
             self.shutdown()
