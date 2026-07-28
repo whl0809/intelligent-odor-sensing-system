@@ -1,0 +1,89 @@
+{
+  "input_files": {
+    "fresh_banana": "C:\\Users\\13494\\OneDrive\\Desktop\\450\\model\\enose_fresh_banana.csv",
+    "fermented_banana": "C:\\Users\\13494\\OneDrive\\Desktop\\450\\model\\enose_fermented_banana (2).csv",
+    "fresh_meat": "C:\\Users\\13494\\OneDrive\\Desktop\\450\\model\\enose_fresh_meat.csv"
+  },
+  "baseline_file": "C:\\Users\\13494\\OneDrive\\Desktop\\450\\model\\enose_baseline(2).csv",
+  "train_fraction": 0.7,
+  "purge_rows": 5,
+  "window_size": 20,
+  "window_stride": 5,
+  "selected_channels": {
+    "tgs2620": "tgs2620_voltage_v",
+    "tgs2610": "tgs2610_voltage_v",
+    "tgs2611": "tgs2611_voltage_v",
+    "tgs2602": "tgs2602_voltage_v",
+    "tgs2603": "tgs2603_voltage_v",
+    "nh3": "nh3_diff_voltage_v",
+    "h2s": "h2s_diff_voltage_v"
+  },
+  "channel_quality": {
+    "selected_channels": {
+      "tgs2620": "tgs2620_voltage_v",
+      "tgs2610": "tgs2610_voltage_v",
+      "tgs2611": "tgs2611_voltage_v",
+      "tgs2602": "tgs2602_voltage_v",
+      "tgs2603": "tgs2603_voltage_v",
+      "nh3": "nh3_diff_voltage_v",
+      "h2s": "h2s_diff_voltage_v"
+    },
+    "dropped_channels": {
+      "tgs2600": "ADC saturation rate 100.0%"
+    },
+    "tgs_saturation_rates": {
+      "tgs2620": 0.0,
+      "tgs2610": 0.0,
+      "tgs2611": 0.0,
+      "tgs2600": 1.0,
+      "tgs2602": 0.0,
+      "tgs2603": 0.19413919413919414
+    }
+  },
+  "baseline_means": {
+    "tgs2620": 2.0005182635204677,
+    "tgs2610": 1.0950563665672515,
+    "tgs2611": 1.079558433877193,
+    "tgs2602": 2.053665250444445,
+    "tgs2603": 1.879193936251462,
+    "nh3": 0.003865222953216375,
+    "h2s": 0.0009333881578947368
+  },
+  "baseline_scales": {
+    "tgs2620": 0.01332635216407006,
+    "tgs2610": 0.006117888620747738,
+    "tgs2611": 0.0064688219461053395,
+    "tgs2602": 0.01360247359444492,
+    "tgs2603": 0.007574719549400447,
+    "nh3": 0.0035719531203052047,
+    "h2s": 0.0003786960693110837
+  },
+  "split_summary": [
+    {
+      "source_session": "fresh_banana",
+      "original_rows": 195,
+      "training_rows": 131,
+      "purged_rows": 10,
+      "validation_rows": 54,
+      "split_index": 136
+    },
+    {
+      "source_session": "fermented_banana",
+      "original_rows": 157,
+      "training_rows": 104,
+      "purged_rows": 10,
+      "validation_rows": 43,
+      "split_index": 109
+    },
+    {
+      "source_session": "fresh_meat",
+      "original_rows": 194,
+      "training_rows": 130,
+      "purged_rows": 10,
+      "validation_rows": 54,
+      "split_index": 135
+    }
+  ],
+  "training_windows": 63,
+  "validation_windows": 19
+}
