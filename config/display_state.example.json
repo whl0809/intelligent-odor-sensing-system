@@ -1,0 +1,15 @@
+{
+  "food_type": "Chicken",
+  "freshness_level": "Fresh",
+  "confidence": 0.92,
+  "temperature_c": 24.3,
+  "humidity_rh": 51.2,
+  "voc_raw": 12345,
+  "nox_raw": 2450,
+  "nh3_value": 12.4,
+  "nh3_unit": "mV",
+  "h2s_value": 3.2,
+  "h2s_unit": "mV",
+  "system_status": "OK",
+  "updated_at": "2026-07-12T23:30:00+08:00"
+}
