@@ -97,3 +97,41 @@ PIP_INDEX_URL=https://pypi.org/simple \
 PIP_DEFAULT_TIMEOUT=120 \
 python -m pip install -e .
 ```
+
+## Food and freshness classification
+
+The shared classifier supports both live inference and offline processing of a
+CSV created by `acquire-no-sgp41-bme690-sht45`. Classification does not change
+the acquisition CSV or the sensor-reading schedule.
+
+Install the optional ML dependencies:
+
+```bash
+python -m pip install -e '.[classification]'
+```
+
+For automatic acquisition and live classification, run:
+
+```bash
+python -m enose acquire-classify --config config/rpi5.toml
+```
+
+This command acquires ADS7828/TGS, NH3, and H2S data at the configured rate,
+prints and saves every frame, and loads the three model pipelines once. The
+first classification uses acquisition rows 1–60. Classification then runs
+every 10 new rows using a 60-row sliding input, so consecutive inputs retain
+50 rows. Each classification and confidence are printed in the terminal.
+Press Ctrl+C to close the CSV cleanly.
+
+To classify a previously completed CSV instead, run:
+
+```bash
+python tools/classify_food_freshness.py \
+  data/raw/enose_20260728T120000_000000Z.csv
+```
+
+The utility writes per-window predictions and an overall JSON summary under
+`data/classification/<csv filename>/`. Its fixed training baseline and three
+model artifacts are in `models/food_freshness/`. Joblib model files use Python
+pickle internally, so load only repository artifacts whose provenance is
+trusted.

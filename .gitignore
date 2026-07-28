@@ -6,3 +6,4 @@ src/*.egg-info/
 *.py[cod]
 data/raw/*.csv
 data/raw/*.json
+data/classification/

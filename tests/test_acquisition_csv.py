@@ -8,7 +8,13 @@ import pytest
 
 import enose.acquisition as acquisition_module
 from enose.acquisition import Acquisition, Sensors
-from enose.cli import _format_frame, _parser, _without_sgp41_bme690_sht45
+from enose.cli import (
+    _format_frame,
+    _parser,
+    _print_classification,
+    _update_live_classification,
+    _without_sgp41_bme690_sht45,
+)
 from enose.config import load_config
 from enose.csv_logger import (
     CSV_COLUMNS,
@@ -320,6 +326,85 @@ def test_reduced_mode_command_name_replaces_old_name() -> None:
         _parser().parse_args(
             ["acquire-no-sgp41-bme690", "--config", "config/rpi5.toml"]
         )
+
+    live_args = _parser().parse_args(
+        [
+            "acquire-classify",
+            "--config",
+            "config/rpi5.toml",
+            "--frames",
+            "60",
+        ]
+    )
+    assert live_args.command == "acquire-classify"
+    assert live_args.frames == 60
+
+
+def test_live_classification_failure_does_not_stop_acquisition(caplog) -> None:
+    class FailingClassifier:
+        def add_frame(self, frame):
+            raise ValueError("bad model input")
+
+    frame = Frame(
+        timestamp_utc="2026-01-01T00:00:00.000Z",
+        elapsed_s=0.0,
+        sequence=0,
+        frame_duration_ms=1.0,
+        deadline_miss_ms=0.0,
+        sht45=None,
+        ads7828=None,
+        nh3=None,
+        h2s=None,
+        sgp41=None,
+        bme690=None,
+    )
+
+    _update_live_classification(FailingClassifier(), frame)
+
+    assert "classification failed; acquisition will continue" in caplog.text
+
+
+def test_live_classification_is_printed_in_terminal(capsys) -> None:
+    frame = Frame(
+        timestamp_utc="2026-01-01T00:00:59.000Z",
+        elapsed_s=59.0,
+        sequence=59,
+        frame_duration_ms=1.0,
+        deadline_miss_ms=0.0,
+        sht45=None,
+        ads7828=None,
+        nh3=None,
+        h2s=None,
+        sgp41=None,
+        bme690=None,
+    )
+    result = {
+        "raw_rows": 60,
+        "valid_rows": 60,
+        "window_count": 9,
+        "predictions": {
+            "food_type": {
+                "overall_prediction": "banana",
+                "confidence": 0.8,
+            },
+            "freshness": {
+                "overall_prediction": "fresh",
+                "confidence": 0.7,
+            },
+            "combined_class": {
+                "overall_prediction": "fresh_banana",
+                "confidence": 0.6,
+            },
+        },
+    }
+
+    _print_classification(frame, result)
+
+    output = capsys.readouterr().out
+    assert output.startswith("CLASSIFICATION sequence=59 input_rows=60")
+    assert "food_type=banana food_type_confidence=0.8000" in output
+    assert "freshness=fresh freshness_confidence=0.7000" in output
+    assert "combined_class=fresh_banana" in output
 
 
 def test_reduced_mode_omits_disabled_sensors_from_output(tmp_path) -> None:

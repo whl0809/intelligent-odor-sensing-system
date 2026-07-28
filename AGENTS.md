@@ -254,6 +254,12 @@ README.md
 pyproject.toml
 config/rpi5.toml
 hardware/
+models/
+  food_freshness/
+    dataset_and_preprocessing_metadata.json
+    combined_class_best_model.joblib
+    food_type_best_model.joblib
+    freshness_best_model.joblib
 src/enose/
   __init__.py
   cli.py
@@ -267,13 +273,26 @@ src/enose/
   sht45.py
   sgp41.py
   bme690.py
+  classification.py
   svm41_uart.py
   svm41_acquisition.py
 tests/
+tools/
+  classify_food_freshness.py
 data/raw/
 ```
 
 Do not add more layers or directories without a concrete need.
+
+Keep offline food/freshness classification isolated from acquisition. Store
+its fixed metadata and model artifacts under `models/food_freshness/`, and run
+completed CSV files through `tools/classify_food_freshness.py`. Do not load
+untrusted joblib/pickle artifacts.
+
+The live classification path uses the reduced ADS7828/TGS, NH3, and H2S
+acquisition configuration. Load model artifacts once, classify the latest 60
+acquisition rows first at row 60 and then every 10 rows, and keep classification
+failures from stopping CSV acquisition.
 
 ## CLI
 
@@ -284,6 +303,7 @@ python -m enose probe --config config/rpi5.toml
 python -m enose diagnose --config config/rpi5.toml
 python -m enose acquire --config config/rpi5.toml
 python -m enose acquire-no-sgp41-bme690-sht45 --config config/rpi5.toml
+python -m enose acquire-classify --config config/rpi5.toml
 python -m enose acquire-svm41 --config config/rpi5.toml --uart /dev/ttyUSB0
 ```
 
@@ -293,6 +313,8 @@ python -m enose acquire-svm41 --config config/rpi5.toml --uart /dev/ttyUSB0
 - `acquire-no-sgp41-bme690-sht45`: records ADS7828/TGS, NH3, and H2S only.
   SGP41, BME690, and SHT45 are disabled and omitted from terminal and CSV
   output; no SVM41.
+- `acquire-classify`: the same reduced acquisition plus persistent live
+  food/freshness classification with a 60-row input updated every 10 frames.
 - `acquire-svm41`: isolated 1 Hz NH3/H2S I2C plus SVM41 UART recording until Ctrl+C.
 
 Required devices may fail the command. Optional device failures must be reported without blocking the remaining sensors.

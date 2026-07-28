@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable
 from dataclasses import replace
 import logging
 from pathlib import Path
 import sys
-from typing import Sequence
+from typing import Any, Sequence
 
 from .acquisition import Acquisition, Sensors
 from .ads7828 import ADS7828
@@ -25,6 +26,10 @@ from .sht45 import SHT45
 from .svm41_acquisition import run_svm41_acquisition
 
 LOGGER = logging.getLogger(__name__)
+REDUCED_ACQUISITION_COMMANDS = {
+    "acquire-no-sgp41-bme690-sht45",
+    "acquire-classify",
+}
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -35,11 +40,12 @@ def _parser() -> argparse.ArgumentParser:
         "diagnose",
         "acquire",
         "acquire-no-sgp41-bme690-sht45",
+        "acquire-classify",
     ):
         command = subparsers.add_parser(name)
         command.add_argument("--config", required=True, type=Path)
         command.add_argument("--verbose", action="store_true")
-        if name in ("acquire", "acquire-no-sgp41-bme690-sht45"):
+        if name == "acquire" or name in REDUCED_ACQUISITION_COMMANDS:
             command.add_argument("--frames", type=int)
     svm41 = subparsers.add_parser("acquire-svm41")
     svm41.add_argument("--config", required=True, type=Path)
@@ -176,6 +182,34 @@ def _print_frame(frame: Frame, columns: tuple[str, ...] = CSV_COLUMNS) -> None:
     print(_format_frame(frame, columns), flush=True)
 
 
+def _print_classification(frame: Frame, result: dict[str, Any]) -> None:
+    predictions = result["predictions"]
+    fields = [
+        "CLASSIFICATION",
+        f"sequence={frame.sequence}",
+        f"input_rows={result['raw_rows']}",
+        f"valid_rows={result['valid_rows']}",
+        f"model_windows={result['window_count']}",
+    ]
+    for task_name in ("food_type", "freshness", "combined_class"):
+        prediction = predictions[task_name]
+        fields.append(f"{task_name}={prediction['overall_prediction']}")
+        fields.append(
+            f"{task_name}_confidence={prediction['confidence']:.4f}"
+        )
+    print(" ".join(fields), flush=True)
+
+
+def _update_live_classification(classifier: Any, frame: Frame) -> None:
+    try:
+        result = classifier.add_frame(frame)
+    except Exception:
+        LOGGER.exception("classification failed; acquisition will continue")
+        return
+    if result is not None:
+        _print_classification(frame, result)
+
+
 def _diagnose(config: AppConfig, sensors: Sensors) -> int:
     acquisition = Acquisition(config, sensors)
     try:
@@ -195,6 +229,7 @@ def _acquire(
     sensors: Sensors,
     max_frames: int | None,
     columns: tuple[str, ...] = CSV_COLUMNS,
+    on_frame: Callable[[Frame], None] | None = None,
 ) -> int:
     if max_frames is not None and max_frames < 1:
         raise ValueError("--frames must be at least 1")
@@ -208,11 +243,17 @@ def _acquire(
     ) as csv_logger:
         print(f"writing {csv_logger.path}")
         acquisition = Acquisition(config, sensors)
+
+        def handle_frame(frame: Frame) -> None:
+            _print_frame(frame, columns)
+            if on_frame is not None:
+                on_frame(frame)
+
         try:
             count = acquisition.run(
                 csv_logger,
                 max_frames=max_frames,
-                on_frame=lambda frame: _print_frame(frame, columns),
+                on_frame=handle_frame,
             )
         except KeyboardInterrupt:
             print("acquisition stopped", file=sys.stderr)
@@ -236,8 +277,25 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print("acquisition stopped", file=sys.stderr)
                 return 130
             return 0
-        if args.command == "acquire-no-sgp41-bme690-sht45":
+        if args.command in REDUCED_ACQUISITION_COMMANDS:
             config = _without_sgp41_bme690_sht45(config)
+        live_classifier = None
+        if args.command == "acquire-classify":
+            try:
+                from .classification import (
+                    FoodFreshnessClassifier,
+                    SlidingWindowClassifier,
+                )
+
+                live_classifier = SlidingWindowClassifier(
+                    FoodFreshnessClassifier(),
+                    window_rows=60,
+                    update_rows=10,
+                )
+            except Exception as exc:
+                raise RuntimeError(
+                    f"classification initialization failed: {exc}"
+                ) from exc
         with I2CBus(config.acquisition.bus) as bus:
             sensors = build_sensors(config, bus)
             if args.command == "probe":
@@ -246,10 +304,26 @@ def main(argv: Sequence[str] | None = None) -> int:
                 return _diagnose(config, sensors)
             columns = (
                 NO_SGP41_BME690_SHT45_CSV_COLUMNS
-                if args.command == "acquire-no-sgp41-bme690-sht45"
+                if args.command in REDUCED_ACQUISITION_COMMANDS
                 else CSV_COLUMNS
             )
-            return _acquire(config, sensors, args.frames, columns)
+            on_frame = (
+                (
+                    lambda frame: _update_live_classification(
+                        live_classifier,
+                        frame,
+                    )
+                )
+                if live_classifier is not None
+                else None
+            )
+            return _acquire(
+                config,
+                sensors,
+                args.frames,
+                columns,
+                on_frame,
+            )
     except ValueError as exc:
         LOGGER.error("%s", exc)
         return 2
