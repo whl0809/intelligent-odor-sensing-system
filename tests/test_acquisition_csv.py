@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 from dataclasses import replace
 from datetime import UTC, datetime
+import json
 
 import pytest
 
@@ -11,7 +12,6 @@ from enose.acquisition import Acquisition, Sensors
 from enose.cli import (
     _format_frame,
     _parser,
-    _print_classification,
     _update_live_classification,
     _without_sgp41_bme690_sht45,
 )
@@ -22,7 +22,13 @@ from enose.csv_logger import (
     CSVLogger,
     frame_to_row,
 )
-from enose.records import BME690Sample, Frame, SGP41Sample, SHT45Sample
+from enose.records import (
+    BME690Sample,
+    Frame,
+    MCP3421Sample,
+    SGP41Sample,
+    SHT45Sample,
+)
 from conftest import FakeClock
 
 
@@ -334,10 +340,13 @@ def test_reduced_mode_command_name_replaces_old_name() -> None:
             "config/rpi5.toml",
             "--frames",
             "60",
+            "--display-state",
+            "runtime/display_state.json",
         ]
     )
     assert live_args.command == "acquire-classify"
     assert live_args.frames == 60
+    assert live_args.display_state.as_posix() == "runtime/display_state.json"
 
 
 def test_live_classification_failure_does_not_stop_acquisition(caplog) -> None:
@@ -364,7 +373,10 @@ def test_live_classification_failure_does_not_stop_acquisition(caplog) -> None:
     assert "classification failed; acquisition will continue" in caplog.text
 
 
-def test_live_classification_is_printed_in_terminal(capsys) -> None:
+def test_live_classification_is_printed_and_published(
+    capsys,
+    tmp_path,
+) -> None:
     frame = Frame(
         timestamp_utc="2026-01-01T00:00:59.000Z",
         elapsed_s=59.0,
@@ -373,8 +385,8 @@ def test_live_classification_is_printed_in_terminal(capsys) -> None:
         deadline_miss_ms=0.0,
         sht45=None,
         ads7828=None,
-        nh3=None,
-        h2s=None,
+        nh3=MCP3421Sample(100, 0.0124, 18, 1),
+        h2s=MCP3421Sample(50, 0.0032, 18, 1),
         sgp41=None,
         bme690=None,
     )
@@ -398,13 +410,25 @@ def test_live_classification_is_printed_in_terminal(capsys) -> None:
         },
     }
 
-    _print_classification(frame, result)
+    class ReturningClassifier:
+        def add_frame(self, candidate):
+            assert candidate is frame
+            return result
 
+    state_path = tmp_path / "runtime" / "display_state.json"
+    _update_live_classification(ReturningClassifier(), frame, state_path)
     output = capsys.readouterr().out
     assert output.startswith("CLASSIFICATION sequence=59 input_rows=60")
     assert "food_type=banana food_type_confidence=0.8000" in output
     assert "freshness=fresh freshness_confidence=0.7000" in output
     assert "combined_class=fresh_banana" in output
+
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert state["combined_class"] == "Fresh Banana"
+    assert state["nh3_value"] == pytest.approx(12.4)
+    assert state["h2s_value"] == pytest.approx(3.2)
+    assert state["system_status"] == "OK"
+    assert not list(state_path.parent.glob("*.tmp"))
 
 
 def test_reduced_mode_omits_disabled_sensors_from_output(tmp_path) -> None:

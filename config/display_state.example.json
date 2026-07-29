@@ -1,15 +1,17 @@
 {
-  "food_type": "Chicken",
+  "food_type": "Banana",
   "freshness_level": "Fresh",
-  "confidence": 0.92,
-  "temperature_c": 24.3,
-  "humidity_rh": 51.2,
-  "voc_raw": 12345,
-  "nox_raw": 2450,
+  "combined_class": "Fresh Banana",
+  "food_confidence": 0.94,
+  "freshness_confidence": 0.91,
+  "combined_confidence": 0.89,
+  "input_rows": 60,
+  "valid_rows": 60,
+  "model_windows": 9,
   "nh3_value": 12.4,
   "nh3_unit": "mV",
   "h2s_value": 3.2,
   "h2s_unit": "mV",
   "system_status": "OK",
-  "updated_at": "2026-07-12T23:30:00+08:00"
+  "updated_at": "2026-07-28T20:30:00Z"
 }

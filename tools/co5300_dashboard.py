@@ -1,11 +1,7 @@
 #!/usr/bin/env python3
-"""CO5300 dashboard for the ECE450 odor-sensing system.
+"""CO5300 dashboard for live ECE450 food/freshness classification.
 
-Place this file at:
-    ECE450_software/tools/co5300_dashboard.py
-
-It reuses the verified GPIO-QSPI transport in:
-    ECE450_software/tools/co5300_qspi_test.py
+It reuses the GPIO-QSPI transport in ``tools/co5300_qspi_test.py``.
 
 Examples:
     # Show example values once and keep the image on-screen
@@ -62,11 +58,13 @@ from co5300_qspi_test import (  # type: ignore
 class DisplayState:
     food_type: str = "Unknown"
     freshness_level: str = "Unknown"
-    confidence: float = 0.0
-    temperature_c: float | None = None
-    humidity_rh: float | None = None
-    voc_raw: float | None = None
-    nox_raw: float | None = None
+    combined_class: str = "Unknown"
+    food_confidence: float = 0.0
+    freshness_confidence: float = 0.0
+    combined_confidence: float = 0.0
+    input_rows: int = 0
+    valid_rows: int = 0
+    model_windows: int = 0
     nh3_value: float | None = None
     nh3_unit: str = "mV"
     h2s_value: float | None = None
@@ -99,6 +97,18 @@ def _bounded_confidence(value: Any) -> float:
     return max(0.0, min(1.0, confidence))
 
 
+def _nonnegative_int(value: Any, name: str) -> int:
+    if isinstance(value, bool):
+        raise ValueError(f"{name} must be an integer, not bool")
+    try:
+        result = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be an integer") from exc
+    if result < 0:
+        raise ValueError(f"{name} must not be negative")
+    return result
+
+
 def load_state(path: Path) -> DisplayState:
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
@@ -110,14 +120,26 @@ def load_state(path: Path) -> DisplayState:
     if not isinstance(raw, dict):
         raise ValueError("display state JSON must contain one object")
 
+    legacy_confidence = raw.get("confidence", 0.0)
     return DisplayState(
         food_type=str(raw.get("food_type", "Unknown")),
         freshness_level=str(raw.get("freshness_level", "Unknown")),
-        confidence=_bounded_confidence(raw.get("confidence", 0.0)),
-        temperature_c=_number_or_none(raw.get("temperature_c"), "temperature_c"),
-        humidity_rh=_number_or_none(raw.get("humidity_rh"), "humidity_rh"),
-        voc_raw=_number_or_none(raw.get("voc_raw"), "voc_raw"),
-        nox_raw=_number_or_none(raw.get("nox_raw"), "nox_raw"),
+        combined_class=str(raw.get("combined_class", "Unknown")),
+        food_confidence=_bounded_confidence(
+            raw.get("food_confidence", legacy_confidence)
+        ),
+        freshness_confidence=_bounded_confidence(
+            raw.get("freshness_confidence", legacy_confidence)
+        ),
+        combined_confidence=_bounded_confidence(
+            raw.get("combined_confidence", legacy_confidence)
+        ),
+        input_rows=_nonnegative_int(raw.get("input_rows", 0), "input_rows"),
+        valid_rows=_nonnegative_int(raw.get("valid_rows", 0), "valid_rows"),
+        model_windows=_nonnegative_int(
+            raw.get("model_windows", 0),
+            "model_windows",
+        ),
         nh3_value=_number_or_none(raw.get("nh3_value"), "nh3_value"),
         nh3_unit=str(raw.get("nh3_unit", "mV")),
         h2s_value=_number_or_none(raw.get("h2s_value"), "h2s_value"),
@@ -135,6 +157,9 @@ def find_font(bold: bool = False) -> str | None:
         "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf"
         if bold
         else "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+        "C:/Windows/Fonts/arialbd.ttf"
+        if bold
+        else "C:/Windows/Fonts/arial.ttf",
     )
     for candidate in candidates:
         if Path(candidate).exists():
@@ -175,7 +200,7 @@ def freshness_color(level: str) -> tuple[int, int, int]:
     normalized = level.strip().lower()
     if normalized in {"fresh", "good", "safe"}:
         return GOOD
-    if normalized in {"moderate", "warning", "aging"}:
+    if normalized in {"moderate", "warning", "aging", "fermented"}:
         return WARN
     if normalized in {"spoiled", "bad", "unsafe"}:
         return BAD
@@ -241,13 +266,16 @@ def render_dashboard(state: DisplayState) -> Image.Image:
     image = Image.new("RGB", (WIDTH, HEIGHT), BACKGROUND)
     draw = ImageDraw.Draw(image)
 
-    # Header
-    draw.text((18, 14), "ODOR SENSING", font=FONT_TITLE, fill=TEXT)
-    draw.text((18, 44), "Real-time food freshness monitor", font=FONT_SMALL, fill=MUTED)
+    draw.text((18, 14), "E-NOSE CLASSIFIER", font=FONT_TITLE, fill=TEXT)
+    draw.text(
+        (18, 44),
+        "Live 60-sample sliding-window result",
+        font=FONT_SMALL,
+        fill=MUTED,
+    )
     draw.line((14, 65, WIDTH - 14, 65), fill=BORDER, width=1)
 
-    # Primary summary card
-    summary = (14, 78, WIDTH - 14, 205)
+    summary = (14, 78, WIDTH - 14, 210)
     draw_round_card(draw, summary)
     draw.text((28, 91), "FOOD TYPE", font=FONT_SECTION, fill=MUTED)
     food_font = fit_font(draw, state.food_type, 210, 29)
@@ -269,52 +297,89 @@ def render_dashboard(state: DisplayState) -> Image.Image:
         fill=(8, 13, 22),
     )
 
-    confidence_percent = int(round(state.confidence * 100))
-    draw.text((28, 163), "Confidence", font=FONT_SMALL_BOLD, fill=MUTED)
+    combined_text = state.combined_class.upper()
+    combined_font = fit_font(draw, combined_text, 235, 14, 11)
+    draw.text((28, 160), "COMBINED", font=FONT_SMALL_BOLD, fill=MUTED)
+    draw.text((105, 158), combined_text, font=combined_font, fill=TEXT)
+
+    confidence_percent = int(round(state.combined_confidence * 100))
     conf_text = f"{confidence_percent}%"
-    conf_w, _ = text_size(draw, conf_text, FONT_MEDIUM)
-    draw.text((WIDTH - 28 - conf_w, 151), conf_text, font=FONT_MEDIUM, fill=TEXT)
+    conf_w, _ = text_size(draw, conf_text, FONT_SMALL_BOLD)
+    draw.text(
+        (WIDTH - 28 - conf_w, 163),
+        conf_text,
+        font=FONT_SMALL_BOLD,
+        fill=TEXT,
+    )
 
-    bar = (28, 185, WIDTH - 28, 193)
+    bar = (28, 190, WIDTH - 28, 198)
     draw.rounded_rectangle(bar, radius=4, fill=(34, 47, 63))
-    fill_right = bar[0] + int((bar[2] - bar[0]) * state.confidence)
+    fill_right = bar[0] + int(
+        (bar[2] - bar[0]) * state.combined_confidence
+    )
     if fill_right > bar[0]:
-        draw.rounded_rectangle((bar[0], bar[1], fill_right, bar[3]), radius=4, fill=level_color)
+        draw.rounded_rectangle(
+            (bar[0], bar[1], fill_right, bar[3]),
+            radius=4,
+            fill=level_color,
+        )
 
-    # Sensor values: 2 columns x 3 rows
     left_x = 14
     gap = 10
     card_w = (WIDTH - 28 - gap) // 2
     right_x = left_x + card_w + gap
-    y_positions = (218, 292, 366)
+    y_positions = (221, 293, 365)
     card_h = 64
 
     draw_metric(
-        draw, (left_x, y_positions[0], left_x + card_w, y_positions[0] + card_h),
-        "TEMPERATURE", fmt(state.temperature_c), "°C", WARN
+        draw,
+        (left_x, y_positions[0], left_x + card_w, y_positions[0] + card_h),
+        "FOOD CONFIDENCE",
+        f"{state.food_confidence * 100:.0f}",
+        "%",
+        GOOD,
     )
     draw_metric(
-        draw, (right_x, y_positions[0], right_x + card_w, y_positions[0] + card_h),
-        "HUMIDITY", fmt(state.humidity_rh), "%RH", BLUE
+        draw,
+        (right_x, y_positions[0], right_x + card_w, y_positions[0] + card_h),
+        "FRESHNESS CONFIDENCE",
+        f"{state.freshness_confidence * 100:.0f}",
+        "%",
+        level_color,
     )
     draw_metric(
-        draw, (left_x, y_positions[1], left_x + card_w, y_positions[1] + card_h),
-        "VOC", fmt(state.voc_raw, 0), "SRAW", ACCENT
+        draw,
+        (left_x, y_positions[1], left_x + card_w, y_positions[1] + card_h),
+        "MODEL CONFIDENCE",
+        f"{state.combined_confidence * 100:.0f}",
+        "%",
+        ACCENT,
     )
     draw_metric(
-        draw, (right_x, y_positions[1], right_x + card_w, y_positions[1] + card_h),
-        "NOx", fmt(state.nox_raw, 0), "SRAW", ACCENT
+        draw,
+        (right_x, y_positions[1], right_x + card_w, y_positions[1] + card_h),
+        "VALID INPUT",
+        f"{state.valid_rows}/{state.input_rows}",
+        f"{state.model_windows} WIN",
+        BLUE,
     )
     draw_metric(
-        draw, (left_x, y_positions[2], left_x + card_w, y_positions[2] + card_h),
-        "NH₃", fmt(state.nh3_value, 2), state.nh3_unit, WARN
+        draw,
+        (left_x, y_positions[2], left_x + card_w, y_positions[2] + card_h),
+        "NH3",
+        fmt(state.nh3_value, 2),
+        state.nh3_unit,
+        WARN,
     )
     draw_metric(
-        draw, (right_x, y_positions[2], right_x + card_w, y_positions[2] + card_h),
-        "H₂S", fmt(state.h2s_value, 2), state.h2s_unit, BAD
+        draw,
+        (right_x, y_positions[2], right_x + card_w, y_positions[2] + card_h),
+        "H2S",
+        fmt(state.h2s_value, 2),
+        state.h2s_unit,
+        BAD,
     )
 
-    # Status strip
     status_box = (14, 443, WIDTH - 14, 488)
     draw_round_card(draw, status_box)
     color = status_color(state.system_status)
@@ -324,10 +389,14 @@ def render_dashboard(state: DisplayState) -> Image.Image:
 
     updated = state.updated_at.strip()
     if updated:
-        timestamp = updated
+        try:
+            timestamp = datetime.fromisoformat(
+                updated.replace("Z", "+00:00")
+            ).strftime("%H:%M:%S")
+        except ValueError:
+            timestamp = updated[-8:]
     else:
         timestamp = datetime.now().strftime("%H:%M:%S")
-    timestamp = timestamp[-19:]
     t_w, _ = text_size(draw, timestamp, FONT_SMALL)
     draw.text((WIDTH - 28 - t_w, 460), timestamp, font=FONT_SMALL, fill=MUTED)
 
@@ -354,17 +423,20 @@ def image_to_rgb565(image: Image.Image, bgr: bool = False) -> bytes:
 
 
 def demo_state(step: int) -> DisplayState:
-    levels = ("Fresh", "Fresh", "Moderate", "Spoiled")
+    levels = ("Fresh", "Fresh", "Fermented", "Fresh")
     level = levels[(step // 4) % len(levels)]
     confidence = (0.94, 0.91, 0.78, 0.88)[(step // 4) % 4]
+    food = ("Banana", "Banana", "Banana", "Meat")[(step // 4) % 4]
     return DisplayState(
-        food_type=("Chicken", "Beef", "Salmon", "Apple")[(step // 8) % 4],
+        food_type=food,
         freshness_level=level,
-        confidence=confidence,
-        temperature_c=24.0 + 0.6 * math.sin(step / 2),
-        humidity_rh=51.0 + 2.4 * math.sin(step / 3),
-        voc_raw=12100 + 180 * math.sin(step / 2),
-        nox_raw=2450 + 60 * math.cos(step / 3),
+        combined_class=f"{level} {food}",
+        food_confidence=min(1.0, confidence + 0.02),
+        freshness_confidence=max(0.0, confidence - 0.03),
+        combined_confidence=confidence,
+        input_rows=60,
+        valid_rows=60,
+        model_windows=9,
         nh3_value=12.4 + 0.8 * math.sin(step / 4),
         nh3_unit="mV",
         h2s_value=3.2 + 0.3 * math.cos(step / 5),
@@ -467,7 +539,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 state = DisplayState(
                     food_type="Unknown",
                     freshness_level="Unknown",
-                    confidence=0.0,
+                    combined_class="State Error",
                     system_status="ERROR",
                     updated_at=datetime.now().isoformat(timespec="seconds"),
                 )
@@ -477,7 +549,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(
                     f"Drawing: food={state.food_type}, "
                     f"freshness={state.freshness_level}, "
-                    f"confidence={state.confidence:.0%}, "
+                    f"confidence={state.combined_confidence:.0%}, "
                     f"status={state.system_status}"
                 )
                 frame = image_to_rgb565(render_dashboard(state), args.bgr)

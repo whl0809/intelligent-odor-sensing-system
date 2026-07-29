@@ -3,7 +3,7 @@
 
 This program uses software-timed 4-data-line QSPI through the Linux lgpio
 wave API.  It intentionally does not use /dev/spidev*, so it can coexist
-with the ECE450 ADS114S06 wiring which owns the physical SPI0 lines.
+with the ECE450 sensors on the I2C bus.
 
 Default independent BCM GPIO wiring:
     CLK  = 21

@@ -123,6 +123,27 @@ every 10 new rows using a 60-row sliding input, so consecutive inputs retain
 50 rows. Each classification and confidence are printed in the terminal.
 Press Ctrl+C to close the CSV cleanly.
 
+To show the same live results on the CO5300 display, first install its
+system-level GPIO and rendering dependencies:
+
+```bash
+sudo apt update
+sudo apt install -y python3-lgpio python3-pil gpiod
+```
+
+With the project virtual environment active, start the display, acquisition,
+and classifier together:
+
+```bash
+bash tools/run_acquire_classify_display.sh
+```
+
+The display shows food type, freshness, combined class, all three model
+confidences, valid rows in the current 60-row input, model-window count, and
+the current NH3/H2S differential voltages. The dashboard runs separately from
+the 1 Hz acquisition loop, so a slow software-QSPI refresh does not delay
+sensor sampling. See `docs/CO5300_DASHBOARD.md` for wiring and preview commands.
+
 To classify a previously completed CSV instead, run:
 
 ```bash

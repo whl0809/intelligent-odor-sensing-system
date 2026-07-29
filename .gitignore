@@ -7,3 +7,4 @@ src/*.egg-info/
 data/raw/*.csv
 data/raw/*.json
 data/classification/
+runtime/

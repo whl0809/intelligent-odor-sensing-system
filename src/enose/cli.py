@@ -3,9 +3,11 @@ from __future__ import annotations
 import argparse
 from collections.abc import Callable
 from dataclasses import replace
+import json
 import logging
 from pathlib import Path
 import sys
+import tempfile
 from typing import Any, Sequence
 
 from .acquisition import Acquisition, Sensors
@@ -47,6 +49,12 @@ def _parser() -> argparse.ArgumentParser:
         command.add_argument("--verbose", action="store_true")
         if name == "acquire" or name in REDUCED_ACQUISITION_COMMANDS:
             command.add_argument("--frames", type=int)
+        if name == "acquire-classify":
+            command.add_argument(
+                "--display-state",
+                type=Path,
+                help="atomically publish live classification JSON here",
+            )
     svm41 = subparsers.add_parser("acquire-svm41")
     svm41.add_argument("--config", required=True, type=Path)
     svm41.add_argument("--uart", default="/dev/ttyUSB0")
@@ -200,7 +208,93 @@ def _print_classification(frame: Frame, result: dict[str, Any]) -> None:
     print(" ".join(fields), flush=True)
 
 
-def _update_live_classification(classifier: Any, frame: Frame) -> None:
+def _build_display_state(
+    frame: Frame,
+    result: dict[str, Any],
+) -> dict[str, Any]:
+    predictions = result["predictions"]
+    food = predictions["food_type"]
+    freshness = predictions["freshness"]
+    combined = predictions["combined_class"]
+    food_label = str(food["overall_prediction"])
+    freshness_label = str(freshness["overall_prediction"])
+    combined_label = str(combined["overall_prediction"])
+    consistent = combined_label == f"{freshness_label}_{food_label}"
+    complete = result["valid_rows"] == result["raw_rows"]
+    return {
+        "food_type": food_label.replace("_", " ").title(),
+        "freshness_level": freshness_label.replace("_", " ").title(),
+        "combined_class": combined_label.replace("_", " ").title(),
+        "food_confidence": float(food["confidence"]),
+        "freshness_confidence": float(freshness["confidence"]),
+        "combined_confidence": float(combined["confidence"]),
+        "input_rows": int(result["raw_rows"]),
+        "valid_rows": int(result["valid_rows"]),
+        "model_windows": int(result["window_count"]),
+        "nh3_value": (
+            None
+            if frame.nh3 is None
+            else frame.nh3.differential_voltage_v * 1000.0
+        ),
+        "nh3_unit": "mV",
+        "h2s_value": (
+            None
+            if frame.h2s is None
+            else frame.h2s.differential_voltage_v * 1000.0
+        ),
+        "h2s_unit": "mV",
+        "system_status": "OK" if consistent and complete else "WARNING",
+        "updated_at": frame.timestamp_utc,
+    }
+
+
+def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f"{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            json.dump(payload, handle, indent=2)
+            handle.write("\n")
+            temporary_path = Path(handle.name)
+        temporary_path.replace(path)
+    finally:
+        if temporary_path is not None and temporary_path.exists():
+            temporary_path.unlink()
+
+
+def _starting_display_state() -> dict[str, Any]:
+    return {
+        "food_type": "Collecting",
+        "freshness_level": "Waiting",
+        "combined_class": "Need 60 Samples",
+        "food_confidence": 0.0,
+        "freshness_confidence": 0.0,
+        "combined_confidence": 0.0,
+        "input_rows": 0,
+        "valid_rows": 0,
+        "model_windows": 0,
+        "nh3_value": None,
+        "nh3_unit": "mV",
+        "h2s_value": None,
+        "h2s_unit": "mV",
+        "system_status": "STARTING",
+        "updated_at": "",
+    }
+
+
+def _update_live_classification(
+    classifier: Any,
+    frame: Frame,
+    display_state_path: Path | None = None,
+) -> None:
     try:
         result = classifier.add_frame(frame)
     except Exception:
@@ -208,6 +302,16 @@ def _update_live_classification(classifier: Any, frame: Frame) -> None:
         return
     if result is not None:
         _print_classification(frame, result)
+        if display_state_path is not None:
+            try:
+                _write_json_atomic(
+                    display_state_path,
+                    _build_display_state(frame, result),
+                )
+            except Exception:
+                LOGGER.exception(
+                    "display state update failed; acquisition will continue"
+                )
 
 
 def _diagnose(config: AppConfig, sensors: Sensors) -> int:
@@ -280,6 +384,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command in REDUCED_ACQUISITION_COMMANDS:
             config = _without_sgp41_bme690_sht45(config)
         live_classifier = None
+        display_state_path = None
         if args.command == "acquire-classify":
             try:
                 from .classification import (
@@ -292,6 +397,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                     window_rows=60,
                     update_rows=10,
                 )
+                display_state_path = args.display_state
+                if display_state_path is not None:
+                    _write_json_atomic(
+                        display_state_path,
+                        _starting_display_state(),
+                    )
             except Exception as exc:
                 raise RuntimeError(
                     f"classification initialization failed: {exc}"
@@ -312,6 +423,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     lambda frame: _update_live_classification(
                         live_classifier,
                         frame,
+                        display_state_path,
                     )
                 )
                 if live_classifier is not None

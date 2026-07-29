@@ -279,6 +279,12 @@ src/enose/
 tests/
 tools/
   classify_food_freshness.py
+  co5300_dashboard.py
+  co5300_qspi_test.py
+  run_acquire_classify_display.sh
+docs/
+  CO5300_DASHBOARD.md
+  CO5300_RPI_QSPI.md
 data/raw/
 ```
 
@@ -294,6 +300,11 @@ acquisition configuration. Load model artifacts once, classify the latest 60
 acquisition rows first at row 60 and then every 10 rows, and keep classification
 failures from stopping CSV acquisition.
 
+For CO5300 visualization, publish classification state atomically and keep the
+software-QSPI dashboard in a separate process so display transfer time cannot
+delay 1 Hz sensor acquisition. `tools/run_acquire_classify_display.sh` is the
+one-command launcher for this workflow.
+
 ## CLI
 
 Implement:
@@ -303,7 +314,7 @@ python -m enose probe --config config/rpi5.toml
 python -m enose diagnose --config config/rpi5.toml
 python -m enose acquire --config config/rpi5.toml
 python -m enose acquire-no-sgp41-bme690-sht45 --config config/rpi5.toml
-python -m enose acquire-classify --config config/rpi5.toml
+python -m enose acquire-classify --config config/rpi5.toml [--display-state PATH]
 python -m enose acquire-svm41 --config config/rpi5.toml --uart /dev/ttyUSB0
 ```
 
