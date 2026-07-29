@@ -442,8 +442,8 @@ class SlidingWindowClassifier:
         window_rows: int = 60,
         update_rows: int = 10,
     ) -> None:
-        if window_rows < 1:
-            raise ValueError("window_rows must be at least 1")
+        if window_rows < 20:
+            raise ValueError("window_rows must be at least 20")
         if update_rows < 1 or update_rows > window_rows:
             raise ValueError("update_rows must be between 1 and window_rows")
         self.classifier = classifier

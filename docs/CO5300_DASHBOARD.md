@@ -3,8 +3,9 @@
 The live display workflow has two processes:
 
 1. `python -m enose acquire-classify` samples the reduced sensor set, writes
-   the acquisition CSV, classifies the latest 60 rows every 10 new rows, and
-   atomically publishes the newest result to `runtime/display_state.json`.
+   the acquisition CSV, classifies the latest input window at the selected
+   update interval, and atomically publishes the newest result to
+   `runtime/display_state.json`.
 2. `tools/co5300_dashboard.py` watches that JSON file and sends a rendered
    RGB565 frame to the CO5300 over software QSPI.
 
@@ -48,12 +49,24 @@ The display initially reports that it is collecting samples. The first
 classification appears after row 60, then updates at rows 70, 80, and so on.
 Each update is also printed in the terminal.
 
+The launcher forwards classifier options. For example, to classify the latest
+30 rows every 5 new rows:
+
+```bash
+bash tools/run_acquire_classify_display.sh \
+  --classification-window-rows 30 \
+  --classification-update-rows 5
+```
+
+The input window minimum is 20 rows. Defaults are 60 input rows and 10 update
+rows.
+
 The screen shows:
 
 - food-type prediction and confidence;
 - freshness prediction and confidence;
 - combined-class prediction and confidence;
-- valid rows in the 60-row model input and completed model-window count;
+- valid rows in the selected model input and completed model-window count;
 - current NH3 and H2S differential voltages in mV;
 - state status and the UTC update time.
 

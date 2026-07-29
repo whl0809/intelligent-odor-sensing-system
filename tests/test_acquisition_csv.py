@@ -340,13 +340,25 @@ def test_reduced_mode_command_name_replaces_old_name() -> None:
             "config/rpi5.toml",
             "--frames",
             "60",
+            "--classification-window-rows",
+            "20",
+            "--classification-update-rows",
+            "3",
             "--display-state",
             "runtime/display_state.json",
         ]
     )
     assert live_args.command == "acquire-classify"
     assert live_args.frames == 60
+    assert live_args.classification_window_rows == 20
+    assert live_args.classification_update_rows == 3
     assert live_args.display_state.as_posix() == "runtime/display_state.json"
+
+    default_live_args = _parser().parse_args(
+        ["acquire-classify", "--config", "config/rpi5.toml"]
+    )
+    assert default_live_args.classification_window_rows == 60
+    assert default_live_args.classification_update_rows == 10
 
 
 def test_live_classification_failure_does_not_stop_acquisition(caplog) -> None:

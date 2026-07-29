@@ -269,7 +269,7 @@ def render_dashboard(state: DisplayState) -> Image.Image:
     draw.text((18, 14), "E-NOSE CLASSIFIER", font=FONT_TITLE, fill=TEXT)
     draw.text(
         (18, 44),
-        "Live 60-sample sliding-window result",
+        "Live sliding-window classification",
         font=FONT_SMALL,
         fill=MUTED,
     )

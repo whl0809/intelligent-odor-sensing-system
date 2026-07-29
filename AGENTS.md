@@ -296,9 +296,10 @@ completed CSV files through `tools/classify_food_freshness.py`. Do not load
 untrusted joblib/pickle artifacts.
 
 The live classification path uses the reduced ADS7828/TGS, NH3, and H2S
-acquisition configuration. Load model artifacts once, classify the latest 60
-acquisition rows first at row 60 and then every 10 rows, and keep classification
-failures from stopping CSV acquisition.
+acquisition configuration. Load model artifacts once. Use a configurable
+sliding input of at least 20 acquisition rows and a configurable update
+interval no larger than that input; default to 60 and 10 rows respectively.
+Keep classification failures from stopping CSV acquisition.
 
 For CO5300 visualization, publish classification state atomically and keep the
 software-QSPI dashboard in a separate process so display transfer time cannot
@@ -314,7 +315,7 @@ python -m enose probe --config config/rpi5.toml
 python -m enose diagnose --config config/rpi5.toml
 python -m enose acquire --config config/rpi5.toml
 python -m enose acquire-no-sgp41-bme690-sht45 --config config/rpi5.toml
-python -m enose acquire-classify --config config/rpi5.toml [--display-state PATH]
+python -m enose acquire-classify --config config/rpi5.toml [--classification-window-rows N] [--classification-update-rows N] [--display-state PATH]
 python -m enose acquire-svm41 --config config/rpi5.toml --uart /dev/ttyUSB0
 ```
 
@@ -325,7 +326,8 @@ python -m enose acquire-svm41 --config config/rpi5.toml --uart /dev/ttyUSB0
   SGP41, BME690, and SHT45 are disabled and omitted from terminal and CSV
   output; no SVM41.
 - `acquire-classify`: the same reduced acquisition plus persistent live
-  food/freshness classification with a 60-row input updated every 10 frames.
+  food/freshness classification with configurable input/update row counts,
+  defaulting to a 60-row input updated every 10 frames.
 - `acquire-svm41`: isolated 1 Hz NH3/H2S I2C plus SVM41 UART recording until Ctrl+C.
 
 Required devices may fail the command. Optional device failures must be reported without blocking the remaining sensors.

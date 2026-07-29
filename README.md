@@ -118,10 +118,22 @@ python -m enose acquire-classify --config config/rpi5.toml
 
 This command acquires ADS7828/TGS, NH3, and H2S data at the configured rate,
 prints and saves every frame, and loads the three model pipelines once. The
-first classification uses acquisition rows 1–60. Classification then runs
-every 10 new rows using a 60-row sliding input, so consecutive inputs retain
-50 rows. Each classification and confidence are printed in the terminal.
-Press Ctrl+C to close the CSV cleanly.
+default first classification uses acquisition rows 1–60. Classification then
+runs every 10 new rows using a 60-row sliding input, so consecutive inputs
+retain 50 rows. Each classification and confidence are printed in the
+terminal. Press Ctrl+C to close the CSV cleanly.
+
+Set a different input size and update interval when needed:
+
+```bash
+python -m enose acquire-classify \
+  --config config/rpi5.toml \
+  --classification-window-rows 30 \
+  --classification-update-rows 5
+```
+
+The classification window must contain at least 20 rows. The update interval
+must be between 1 and the selected window size. Defaults remain 60 and 10.
 
 To show the same live results on the CO5300 display, first install its
 system-level GPIO and rendering dependencies:
@@ -139,10 +151,11 @@ bash tools/run_acquire_classify_display.sh
 ```
 
 The display shows food type, freshness, combined class, all three model
-confidences, valid rows in the current 60-row input, model-window count, and
-the current NH3/H2S differential voltages. The dashboard runs separately from
-the 1 Hz acquisition loop, so a slow software-QSPI refresh does not delay
-sensor sampling. See `docs/CO5300_DASHBOARD.md` for wiring and preview commands.
+confidences, valid rows in the current classification input, model-window
+count, and the current NH3/H2S differential voltages. The dashboard runs
+separately from the 1 Hz acquisition loop, so a slow software-QSPI refresh
+does not delay sensor sampling. See `docs/CO5300_DASHBOARD.md` for wiring and
+preview commands.
 
 To classify a previously completed CSV instead, run:
 

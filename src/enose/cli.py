@@ -51,6 +51,18 @@ def _parser() -> argparse.ArgumentParser:
             command.add_argument("--frames", type=int)
         if name == "acquire-classify":
             command.add_argument(
+                "--classification-window-rows",
+                type=int,
+                default=60,
+                help="CSV rows per classification input (default: 60, minimum: 20)",
+            )
+            command.add_argument(
+                "--classification-update-rows",
+                type=int,
+                default=10,
+                help="new rows between classifications (default: 10)",
+            )
+            command.add_argument(
                 "--display-state",
                 type=Path,
                 help="atomically publish live classification JSON here",
@@ -270,11 +282,11 @@ def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
             temporary_path.unlink()
 
 
-def _starting_display_state() -> dict[str, Any]:
+def _starting_display_state(window_rows: int) -> dict[str, Any]:
     return {
         "food_type": "Collecting",
         "freshness_level": "Waiting",
-        "combined_class": "Need 60 Samples",
+        "combined_class": f"Need {window_rows} Samples",
         "food_confidence": 0.0,
         "freshness_confidence": 0.0,
         "combined_confidence": 0.0,
@@ -394,14 +406,16 @@ def main(argv: Sequence[str] | None = None) -> int:
 
                 live_classifier = SlidingWindowClassifier(
                     FoodFreshnessClassifier(),
-                    window_rows=60,
-                    update_rows=10,
+                    window_rows=args.classification_window_rows,
+                    update_rows=args.classification_update_rows,
                 )
                 display_state_path = args.display_state
                 if display_state_path is not None:
                     _write_json_atomic(
                         display_state_path,
-                        _starting_display_state(),
+                        _starting_display_state(
+                            args.classification_window_rows
+                        ),
                     )
             except Exception as exc:
                 raise RuntimeError(

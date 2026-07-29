@@ -144,3 +144,35 @@ def test_live_classification_uses_latest_60_rows_every_10_frames() -> None:
         range(10, 70)
     )
     assert classifier.calls[0][10:] == classifier.calls[1][:50]
+
+
+def test_live_classification_accepts_minimum_window_and_custom_update() -> None:
+    class FakeClassifier:
+        def __init__(self) -> None:
+            self.calls: list[tuple[dict[str, object], ...]] = []
+
+        def classify_rows(self, rows):
+            captured = tuple(dict(row) for row in rows)
+            self.calls.append(captured)
+            return {"call": len(self.calls)}, None
+
+    classifier = FakeClassifier()
+    window = SlidingWindowClassifier(
+        classifier,
+        window_rows=20,
+        update_rows=3,
+    )
+    results = [window.add_frame(_frame(sequence)) for sequence in range(27)]
+
+    assert [index for index, result in enumerate(results) if result] == [
+        19,
+        22,
+        25,
+    ]
+    assert [row["sequence"] for row in classifier.calls[1]] == list(
+        range(3, 23)
+    )
+    with pytest.raises(ValueError, match="at least 20"):
+        SlidingWindowClassifier(classifier, window_rows=19, update_rows=3)
+    with pytest.raises(ValueError, match="between 1 and window_rows"):
+        SlidingWindowClassifier(classifier, window_rows=20, update_rows=21)
