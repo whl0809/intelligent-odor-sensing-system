@@ -360,6 +360,24 @@ def test_reduced_mode_command_name_replaces_old_name() -> None:
     assert default_live_args.classification_window_rows == 60
     assert default_live_args.classification_update_rows == 10
 
+    svm41_args = _parser().parse_args(
+        [
+            "acquire-no-sgp41-bme690-sht45-with-svm41",
+            "--config",
+            "config/rpi5.toml",
+            "--uart",
+            "/dev/ttyUSB1",
+            "--frames",
+            "30",
+        ]
+    )
+    assert (
+        svm41_args.command
+        == "acquire-no-sgp41-bme690-sht45-with-svm41"
+    )
+    assert svm41_args.uart == "/dev/ttyUSB1"
+    assert svm41_args.frames == 30
+
 
 def test_live_classification_failure_does_not_stop_acquisition(caplog) -> None:
     class FailingClassifier:

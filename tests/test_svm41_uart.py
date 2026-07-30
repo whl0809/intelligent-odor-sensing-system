@@ -3,11 +3,15 @@ from __future__ import annotations
 import csv
 from dataclasses import replace
 from datetime import UTC, datetime
+import json
 
 from conftest import FakeClock
 from enose.config import load_config
-from enose.records import MCP3421Sample
-from enose.svm41_acquisition import run_svm41_acquisition
+from enose.records import ADS7828Reading, ADS7828Sample, MCP3421Sample
+from enose.svm41_acquisition import (
+    REDUCED_WITH_SVM41_CSV_COLUMNS,
+    run_svm41_acquisition,
+)
 from enose.svm41_uart import SVM41Sample, SVM41UART, UART_BAUDRATE
 
 
@@ -129,6 +133,47 @@ class FakeSVM41:
         self.closed = True
 
 
+class FakeADS7828:
+    def __init__(self, _bus, address: int, *_args) -> None:
+        self.address = address
+        self.initialized = False
+        self.read_calls = 0
+
+    def initialize(self) -> None:
+        self.initialized = True
+
+    def read_all(self) -> ADS7828Sample:
+        self.read_calls += 1
+        if self.read_calls == 2:
+            raise OSError("ADS7828 unavailable")
+        names = (
+            "tgs2620",
+            "tgs2610",
+            "tgs2611",
+            "tgs2600",
+            "tgs2602",
+            "tgs2603",
+        )
+        return ADS7828Sample(
+            tuple(
+                ADS7828Reading(
+                    sensor=name,
+                    channel=index,
+                    raw=100 + index,
+                    voltage_v=(100 + index) * 2.5 / 4096.0,
+                    saturated=False,
+                )
+                for index, name in enumerate(names)
+            )
+        )
+
+
+class StableSVM41(FakeSVM41):
+    def read(self) -> SVM41Sample:
+        self.read_calls += 1
+        return SVM41Sample(24.0, 50.0, 100.0, 1.0)
+
+
 def test_isolated_loop_keeps_other_values_when_one_read_fails(tmp_path) -> None:
     config = load_config("config/rpi5.toml")
     config = replace(
@@ -197,6 +242,75 @@ def test_isolated_loop_keeps_other_values_when_one_read_fails(tmp_path) -> None:
     assert rows[1]["svm41_temperature_c"] == ""
     assert rows[1]["svm41_error"] == "read_io"
     assert next(tmp_path.glob("*.metadata.json")).exists()
+
+
+def test_reduced_svm41_mode_adds_tgs_and_isolates_ads_failure(
+    tmp_path,
+) -> None:
+    config = load_config("config/rpi5.toml")
+    config = replace(
+        config,
+        acquisition=replace(
+            config.acquisition,
+            output_dir=str(tmp_path),
+            interval_s=1.0,
+            flush_rows=1,
+        ),
+    )
+    clock = FakeClock()
+    ads_devices: list[FakeADS7828] = []
+
+    def ads_factory(*args) -> FakeADS7828:
+        sensor = FakeADS7828(*args)
+        ads_devices.append(sensor)
+        return sensor
+
+    count = run_svm41_acquisition(
+        config,
+        "/dev/test-svm41",
+        max_frames=2,
+        bus_factory=FakeBus,
+        mcp_factory=lambda _bus, address, *_args: FakeMCP3421(address),
+        svm41_factory=StableSVM41,
+        ads7828_factory=ads_factory,
+        include_ads7828=True,
+        sleep_fn=clock.sleep,
+        monotonic_fn=clock.monotonic,
+        utcnow_fn=lambda: datetime(2026, 7, 30, tzinfo=UTC),
+        print_fn=lambda _line: None,
+    )
+
+    assert count == 2
+    assert ads_devices[0].initialized
+    csv_path = next(tmp_path.glob("*.csv"))
+    with csv_path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        rows = list(reader)
+    assert tuple(reader.fieldnames or ()) == REDUCED_WITH_SVM41_CSV_COLUMNS
+    assert not any(
+        column.startswith(("sgp41_", "bme690_", "sht45_"))
+        for column in REDUCED_WITH_SVM41_CSV_COLUMNS
+    )
+    assert rows[0]["tgs2620_raw"] == "100"
+    assert rows[0]["ads7828_ok"] == "True"
+    assert rows[0]["svm41_temperature_c"] == "24.0"
+    assert rows[1]["tgs2620_raw"] == ""
+    assert rows[1]["ads7828_ok"] == "False"
+    assert "ads7828_read_io" in rows[1]["error_codes"]
+    assert rows[1]["nh3_raw"] == str(0x69)
+    assert rows[1]["svm41_temperature_c"] == "24.0"
+
+    metadata_path = next(tmp_path.glob("*.metadata.json"))
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    assert metadata["mode"] == (
+        "acquire-no-sgp41-bme690-sht45-with-svm41"
+    )
+    assert metadata["enabled_devices"] == [
+        "ads7828",
+        "nh3",
+        "h2s",
+        "svm41",
+    ]
 
 
 def test_ctrl_c_stops_svm41_and_closes_outputs(tmp_path) -> None:

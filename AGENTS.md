@@ -126,8 +126,9 @@ When all devices are powered, `probe` should expect:
 An ACK proves only that an address responds. Use identity/self-test checks where available.
 
 An external SVM41 module also uses I2C address `0x6A`. Never connect it to the
-same I2C bus as the H2S MCP3421. For the dedicated NH3/H2S/SVM41 mode, keep
-both MCP3421 devices on I2C and connect SVM41 over UART/SHDLC at 115200 baud.
+same I2C bus as the H2S MCP3421. For every SVM41 acquisition mode, keep the
+MCP3421 devices and optional ADS7828 on I2C and connect SVM41 over UART/SHDLC
+at 115200 baud.
 
 ## TGS board
 
@@ -315,6 +316,7 @@ python -m enose probe --config config/rpi5.toml
 python -m enose diagnose --config config/rpi5.toml
 python -m enose acquire --config config/rpi5.toml
 python -m enose acquire-no-sgp41-bme690-sht45 --config config/rpi5.toml
+python -m enose acquire-no-sgp41-bme690-sht45-with-svm41 --config config/rpi5.toml --uart /dev/ttyUSB0
 python -m enose acquire-classify --config config/rpi5.toml [--classification-window-rows N] [--classification-update-rows N] [--display-state PATH]
 python -m enose acquire-svm41 --config config/rpi5.toml --uart /dev/ttyUSB0
 ```
@@ -325,6 +327,9 @@ python -m enose acquire-svm41 --config config/rpi5.toml --uart /dev/ttyUSB0
 - `acquire-no-sgp41-bme690-sht45`: records ADS7828/TGS, NH3, and H2S only.
   SGP41, BME690, and SHT45 are disabled and omitted from terminal and CSV
   output; no SVM41.
+- `acquire-no-sgp41-bme690-sht45-with-svm41`: records the same ADS7828/TGS,
+  NH3, and H2S fields plus SVM41 temperature, humidity, VOC Index, and NOx
+  Index over UART. SGP41, BME690, and SHT45 remain omitted.
 - `acquire-classify`: the same reduced acquisition plus persistent live
   food/freshness classification with configurable input/update row counts,
   defaulting to a 60-row input updated every 10 frames.

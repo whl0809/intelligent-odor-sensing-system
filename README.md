@@ -23,6 +23,8 @@ python -m enose probe --config config/rpi5.toml
 python -m enose diagnose --config config/rpi5.toml
 python -m enose acquire --config config/rpi5.toml
 python -m enose acquire-no-sgp41-bme690-sht45 --config config/rpi5.toml
+python -m enose acquire-no-sgp41-bme690-sht45-with-svm41 \
+  --config config/rpi5.toml --uart /dev/ttyUSB0
 ```
 
 Use `--verbose` after the subcommand for byte-level diagnostics. A bounded
@@ -34,6 +36,21 @@ PCBs. `acquire-no-sgp41-bme690-sht45` records only all six TGS/ADS7828
 channels, NH3, and H2S. It disables SGP41, BME690, and SHT45; those devices
 do not appear in that mode's terminal rows or CSV columns, and no SVM41 is
 used.
+
+To collect the same reduced TGS/ADS7828, NH3, and H2S fields together with
+SVM41 UART values, run:
+
+```bash
+python -m enose acquire-no-sgp41-bme690-sht45-with-svm41 \
+  --config config/rpi5.toml \
+  --uart /dev/ttyUSB0
+```
+
+This mode additionally records SVM41 temperature, relative humidity, VOC
+Index, and NOx Index. SGP41, BME690, and SHT45 remain disabled and absent from
+the terminal and CSV. Use `--frames 60` for a bounded run; otherwise it
+continues until Ctrl+C. An ADS7828, MCP3421, or SVM41 read failure leaves only
+that device's fields empty while the other devices continue.
 
 The BME690 driver uses Bosch Sensortec's official BME690 SensorAPI v1.1.0
 through a small native extension built during installation. It runs the sensor

@@ -32,6 +32,7 @@ REDUCED_ACQUISITION_COMMANDS = {
     "acquire-no-sgp41-bme690-sht45",
     "acquire-classify",
 }
+REDUCED_SVM41_COMMAND = "acquire-no-sgp41-bme690-sht45-with-svm41"
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -71,6 +72,11 @@ def _parser() -> argparse.ArgumentParser:
     svm41.add_argument("--config", required=True, type=Path)
     svm41.add_argument("--uart", default="/dev/ttyUSB0")
     svm41.add_argument("--verbose", action="store_true")
+    reduced_svm41 = subparsers.add_parser(REDUCED_SVM41_COMMAND)
+    reduced_svm41.add_argument("--config", required=True, type=Path)
+    reduced_svm41.add_argument("--uart", default="/dev/ttyUSB0")
+    reduced_svm41.add_argument("--frames", type=int)
+    reduced_svm41.add_argument("--verbose", action="store_true")
     return parser
 
 
@@ -386,9 +392,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     try:
         config = load_config(args.config)
-        if args.command == "acquire-svm41":
+        if args.command in {"acquire-svm41", REDUCED_SVM41_COMMAND}:
             try:
-                run_svm41_acquisition(config, args.uart)
+                run_svm41_acquisition(
+                    config,
+                    args.uart,
+                    max_frames=getattr(args, "frames", None),
+                    include_ads7828=args.command == REDUCED_SVM41_COMMAND,
+                )
             except KeyboardInterrupt:
                 print("acquisition stopped", file=sys.stderr)
                 return 130

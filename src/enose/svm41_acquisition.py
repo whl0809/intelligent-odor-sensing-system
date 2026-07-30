@@ -11,11 +11,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from .ads7828 import ADS7828
 from .config import AppConfig
-from .csv_logger import _git_commit
+from .csv_logger import NO_SGP41_BME690_SHT45_CSV_COLUMNS, _git_commit
 from .i2c_bus import I2CBus, NotReadyError
 from .mcp3421 import MCP3421
-from .records import MCP3421Sample
+from .records import ADS7828Sample, MCP3421Sample
 from .svm41_uart import SVM41Sample, SVM41UART, UART_BAUDRATE
 
 LOGGER = logging.getLogger(__name__)
@@ -35,37 +36,73 @@ SVM41_CSV_COLUMNS = (
     "h2s_error",
     "svm41_error",
 )
+SVM41_VALUE_COLUMNS = (
+    "svm41_temperature_c",
+    "svm41_relative_humidity_pct",
+    "svm41_voc_index",
+    "svm41_nox_index",
+)
+REDUCED_WITH_SVM41_CSV_COLUMNS = (
+    *NO_SGP41_BME690_SHT45_CSV_COLUMNS[:-1],
+    *SVM41_VALUE_COLUMNS,
+    "svm41_ok",
+    "error_codes",
+)
 
 
 class _CSV:
-    def __init__(self, config: AppConfig, uart_device: str) -> None:
+    def __init__(
+        self,
+        config: AppConfig,
+        uart_device: str,
+        include_ads7828: bool,
+    ) -> None:
         output_dir = Path(config.acquisition.output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
         started = datetime.now(UTC)
-        stem = started.strftime("enose_nh3_h2s_svm41_%Y%m%dT%H%M%S_%fZ")
+        prefix = (
+            "enose_tgs_nh3_h2s_svm41"
+            if include_ads7828
+            else "enose_nh3_h2s_svm41"
+        )
+        stem = started.strftime(f"{prefix}_%Y%m%dT%H%M%S_%fZ")
         self.path = output_dir / f"{stem}.csv"
         self.metadata_path = output_dir / f"{stem}.metadata.json"
         self._handle = self.path.open("x", newline="", encoding="utf-8")
-        self._writer = csv.DictWriter(self._handle, fieldnames=SVM41_CSV_COLUMNS)
+        columns = (
+            REDUCED_WITH_SVM41_CSV_COLUMNS
+            if include_ads7828
+            else SVM41_CSV_COLUMNS
+        )
+        self._writer = csv.DictWriter(self._handle, fieldnames=columns)
         self._writer.writeheader()
         self._flush_rows = config.acquisition.flush_rows
         self._rows_since_flush = 0
+        effective_configuration = {
+            "acquisition": asdict(config.acquisition),
+            "nh3": asdict(config.nh3),
+            "h2s": asdict(config.h2s),
+            "svm41": {
+                "uart_device": uart_device,
+                "baudrate": UART_BAUDRATE,
+            },
+        }
+        enabled_devices = ["nh3", "h2s", "svm41"]
+        if include_ads7828:
+            effective_configuration["ads7828"] = asdict(config.ads7828)
+            enabled_devices.insert(0, "ads7828")
         metadata = {
             "csv_schema_version": 1,
-            "mode": "acquire-svm41",
-            "effective_configuration": {
-                "acquisition": asdict(config.acquisition),
-                "nh3": asdict(config.nh3),
-                "h2s": asdict(config.h2s),
-                "svm41": {
-                    "uart_device": uart_device,
-                    "baudrate": UART_BAUDRATE,
-                },
-            },
+            "mode": (
+                "acquire-no-sgp41-bme690-sht45-with-svm41"
+                if include_ads7828
+                else "acquire-svm41"
+            ),
+            "effective_configuration": effective_configuration,
             "software_commit": _git_commit(),
             "hostname": socket.gethostname(),
             "start_time_utc": started.isoformat().replace("+00:00", "Z"),
-            "enabled_devices": ["nh3", "h2s", "svm41"],
+            "enabled_devices": enabled_devices,
         }
         with self.metadata_path.open("x", encoding="utf-8") as handle:
             json.dump(metadata, handle, indent=2, sort_keys=True)
@@ -128,18 +165,28 @@ def run_svm41_acquisition(
     bus_factory: Callable[[int], Any] = I2CBus,
     mcp_factory: Callable[..., Any] = MCP3421,
     svm41_factory: Callable[[str], Any] = SVM41UART,
+    ads7828_factory: Callable[..., Any] = ADS7828,
+    include_ads7828: bool = False,
     sleep_fn: Callable[[float], None] = time.sleep,
     monotonic_fn: Callable[[], float] = time.monotonic,
     utcnow_fn: Callable[[], datetime] = lambda: datetime.now(UTC),
     print_fn: Callable[[str], None] = print,
 ) -> int:
-    csv_logger = _CSV(config, uart_device)
+    if max_frames is not None and max_frames < 1:
+        raise ValueError("--frames must be at least 1")
+    csv_logger = _CSV(config, uart_device, include_ads7828)
     print_fn(f"writing {csv_logger.path}")
     bus: Any | None = None
+    ads7828: Any | None = None
     nh3: Any | None = None
     h2s: Any | None = None
     svm41: Any | None = None
-    persistent_errors = {"nh3": "", "h2s": "", "svm41": ""}
+    persistent_errors = {
+        "ads7828": "",
+        "nh3": "",
+        "h2s": "",
+        "svm41": "",
+    }
     count = 0
 
     try:
@@ -148,9 +195,27 @@ def run_svm41_acquisition(
         except Exception as exc:
             LOGGER.exception("I2C bus initialization failed")
             code = _error_code("initialize", exc)
+            if include_ads7828:
+                persistent_errors["ads7828"] = code
             persistent_errors["nh3"] = code
             persistent_errors["h2s"] = code
         else:
+            if include_ads7828 and config.ads7828.enabled:
+                try:
+                    ads7828 = ads7828_factory(
+                        bus,
+                        config.ads7828.address,
+                        config.ads7828.saturation_low,
+                        config.ads7828.saturation_high,
+                    )
+                    ads7828.initialize()
+                except Exception as exc:
+                    LOGGER.exception("ads7828 initialization failed")
+                    persistent_errors["ads7828"] = _error_code(
+                        "initialize",
+                        exc,
+                    )
+                    ads7828 = None
             for name, device_config in (("nh3", config.nh3), ("h2s", config.h2s)):
                 try:
                     sensor = mcp_factory(
@@ -181,9 +246,18 @@ def run_svm41_acquisition(
         while max_frames is None or count < max_frames:
             deadline = start + (count + 1) * config.acquisition.interval_s
             sleep_fn(max(0.0, deadline - monotonic_fn()))
+            frame_start = monotonic_fn()
             timestamp = utcnow_fn().isoformat(timespec="milliseconds").replace(
                 "+00:00", "Z"
             )
+
+            ads7828_sample: ADS7828Sample | None = None
+            ads7828_error = persistent_errors["ads7828"]
+            if ads7828 is not None:
+                ads7828_sample, ads7828_error = _read(
+                    "ads7828",
+                    ads7828.read_all,
+                )
 
             nh3_sample: MCP3421Sample | None = None
             nh3_error = persistent_errors["nh3"]
@@ -200,18 +274,67 @@ def run_svm41_acquisition(
             if svm41 is not None and not svm41_error:
                 svm41_sample, svm41_error = _read("svm41", svm41.read)
 
-            row: dict[str, object] = {
-                column: "" for column in SVM41_CSV_COLUMNS
-            }
-            row.update(
-                {
-                    "timestamp_utc": timestamp,
-                    "elapsed_s": monotonic_fn() - start,
-                    "nh3_error": nh3_error,
-                    "h2s_error": h2s_error,
-                    "svm41_error": svm41_error,
-                }
+            frame_end = monotonic_fn()
+            columns = (
+                REDUCED_WITH_SVM41_CSV_COLUMNS
+                if include_ads7828
+                else SVM41_CSV_COLUMNS
             )
+            row: dict[str, object] = {column: "" for column in columns}
+            row["timestamp_utc"] = timestamp
+            row["elapsed_s"] = (
+                frame_start - start
+                if include_ads7828
+                else frame_end - start
+            )
+            if include_ads7828:
+                errors = []
+                for name, error in (
+                    ("ads7828", ads7828_error),
+                    ("nh3", nh3_error),
+                    ("h2s", h2s_error),
+                    ("svm41", svm41_error),
+                ):
+                    if error:
+                        errors.append(f"{name}_{error}")
+                row.update(
+                    {
+                        "sequence": count,
+                        "frame_duration_ms": (
+                            frame_end - frame_start
+                        )
+                        * 1000.0,
+                        "deadline_miss_ms": max(
+                            0.0,
+                            (frame_start - deadline) * 1000.0,
+                        ),
+                        "ads7828_ok": ads7828_sample is not None,
+                        "nh3_ok": nh3_sample is not None,
+                        "h2s_ok": h2s_sample is not None,
+                        "svm41_ok": svm41_sample is not None,
+                        "error_codes": ";".join(errors),
+                    }
+                )
+            else:
+                row.update(
+                    {
+                        "nh3_error": nh3_error,
+                        "h2s_error": h2s_error,
+                        "svm41_error": svm41_error,
+                    }
+                )
+            if ads7828_sample is not None:
+                for sensor, reading in ads7828_sample.by_sensor().items():
+                    row[f"{sensor}_raw"] = reading.raw
+                    row[f"{sensor}_voltage_v"] = reading.voltage_v
+                    if reading.saturated and include_ads7828:
+                        saturation = f"ads7828_saturation_{sensor}"
+                        existing = str(row["error_codes"])
+                        row["error_codes"] = ";".join(
+                            value
+                            for value in (existing, saturation)
+                            if value
+                        )
             if nh3_sample is not None:
                 row["nh3_raw"] = nh3_sample.raw
                 row["nh3_diff_voltage_v"] = nh3_sample.differential_voltage_v
@@ -227,27 +350,35 @@ def run_svm41_acquisition(
                 row["svm41_nox_index"] = svm41_sample.nox_index
 
             csv_logger.write(row)
-            errors = ",".join(
-                f"{name}:{error}"
-                for name, error in (
-                    ("nh3", nh3_error),
-                    ("h2s", h2s_error),
-                    ("svm41", svm41_error),
+            if include_ads7828:
+                print_fn(
+                    " ".join(
+                        f"{column}={_display(row[column])}"
+                        for column in REDUCED_WITH_SVM41_CSV_COLUMNS
+                    )
                 )
-                if error
-            )
-            print_fn(
-                f"{timestamp} "
-                f"NH3 raw={_display(row['nh3_raw'])} "
-                f"V={_display(row['nh3_diff_voltage_v'], 6)} | "
-                f"H2S raw={_display(row['h2s_raw'])} "
-                f"V={_display(row['h2s_diff_voltage_v'], 6)} | "
-                f"SVM41 T={_display(row['svm41_temperature_c'], 2)} C "
-                f"RH={_display(row['svm41_relative_humidity_pct'], 2)} % "
-                f"VOC Index={_display(row['svm41_voc_index'], 1)} "
-                f"NOx Index={_display(row['svm41_nox_index'], 1)} "
-                f"errors={errors or '-'}"
-            )
+            else:
+                errors = ",".join(
+                    f"{name}:{error}"
+                    for name, error in (
+                        ("nh3", nh3_error),
+                        ("h2s", h2s_error),
+                        ("svm41", svm41_error),
+                    )
+                    if error
+                )
+                print_fn(
+                    f"{timestamp} "
+                    f"NH3 raw={_display(row['nh3_raw'])} "
+                    f"V={_display(row['nh3_diff_voltage_v'], 6)} | "
+                    f"H2S raw={_display(row['h2s_raw'])} "
+                    f"V={_display(row['h2s_diff_voltage_v'], 6)} | "
+                    f"SVM41 T={_display(row['svm41_temperature_c'], 2)} C "
+                    f"RH={_display(row['svm41_relative_humidity_pct'], 2)} % "
+                    f"VOC Index={_display(row['svm41_voc_index'], 1)} "
+                    f"NOx Index={_display(row['svm41_nox_index'], 1)} "
+                    f"errors={errors or '-'}"
+                )
             count += 1
     finally:
         if svm41 is not None:
