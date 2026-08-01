@@ -25,6 +25,8 @@ python -m enose acquire --config config/rpi5.toml
 python -m enose acquire-no-sgp41-bme690-sht45 --config config/rpi5.toml
 python -m enose acquire-no-sgp41-bme690-sht45-with-svm41 \
   --config config/rpi5.toml --uart /dev/ttyUSB0
+python -m enose acquire-tgs-svm41 \
+  --config config/rpi5.toml --uart /dev/ttyUSB0
 ```
 
 Use `--verbose` after the subcommand for byte-level diagnostics. A bounded
@@ -51,6 +53,19 @@ Index, and NOx Index. SGP41, BME690, and SHT45 remain disabled and absent from
 the terminal and CSV. Use `--frames 60` for a bounded run; otherwise it
 continues until Ctrl+C. An ADS7828, MCP3421, or SVM41 read failure leaves only
 that device's fields empty while the other devices continue.
+
+To collect only the six TGS/ADS7828 channels and SVM41 UART values, without
+initializing or logging NH3 or H2S, run:
+
+```bash
+python -m enose acquire-tgs-svm41 \
+  --config config/rpi5.toml \
+  --uart /dev/ttyUSB0
+```
+
+This mode omits NH3, H2S, SGP41, BME690, and SHT45 from both terminal output
+and CSV. Use `--frames 60` for a bounded run; otherwise it continues until
+Ctrl+C.
 
 The BME690 driver uses Bosch Sensortec's official BME690 SensorAPI v1.1.0
 through a small native extension built during installation. It runs the sensor

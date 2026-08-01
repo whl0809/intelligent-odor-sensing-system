@@ -378,6 +378,21 @@ def test_reduced_mode_command_name_replaces_old_name() -> None:
     assert svm41_args.uart == "/dev/ttyUSB1"
     assert svm41_args.frames == 30
 
+    tgs_svm41_args = _parser().parse_args(
+        [
+            "acquire-tgs-svm41",
+            "--config",
+            "config/rpi5.toml",
+            "--uart",
+            "/dev/ttyUSB2",
+            "--frames",
+            "20",
+        ]
+    )
+    assert tgs_svm41_args.command == "acquire-tgs-svm41"
+    assert tgs_svm41_args.uart == "/dev/ttyUSB2"
+    assert tgs_svm41_args.frames == 20
+
 
 def test_live_classification_failure_does_not_stop_acquisition(caplog) -> None:
     class FailingClassifier:

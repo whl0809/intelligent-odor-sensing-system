@@ -10,6 +10,7 @@ from enose.config import load_config
 from enose.records import ADS7828Reading, ADS7828Sample, MCP3421Sample
 from enose.svm41_acquisition import (
     REDUCED_WITH_SVM41_CSV_COLUMNS,
+    TGS_SVM41_CSV_COLUMNS,
     run_svm41_acquisition,
 )
 from enose.svm41_uart import SVM41Sample, SVM41UART, UART_BAUDRATE
@@ -311,6 +312,64 @@ def test_reduced_svm41_mode_adds_tgs_and_isolates_ads_failure(
         "h2s",
         "svm41",
     ]
+
+
+def test_tgs_svm41_mode_never_initializes_or_logs_mcp3421(
+    tmp_path,
+) -> None:
+    config = load_config("config/rpi5.toml")
+    config = replace(
+        config,
+        acquisition=replace(
+            config.acquisition,
+            output_dir=str(tmp_path),
+            interval_s=1.0,
+            flush_rows=1,
+        ),
+    )
+    clock = FakeClock()
+    terminal: list[str] = []
+
+    def forbidden_mcp_factory(*_args):
+        raise AssertionError("MCP3421 must not be initialized")
+
+    count = run_svm41_acquisition(
+        config,
+        "/dev/test-svm41",
+        max_frames=1,
+        bus_factory=FakeBus,
+        mcp_factory=forbidden_mcp_factory,
+        svm41_factory=StableSVM41,
+        ads7828_factory=FakeADS7828,
+        include_ads7828=True,
+        include_mcp3421=False,
+        sleep_fn=clock.sleep,
+        monotonic_fn=clock.monotonic,
+        utcnow_fn=lambda: datetime(2026, 8, 1, tzinfo=UTC),
+        print_fn=terminal.append,
+    )
+
+    assert count == 1
+    csv_path = next(tmp_path.glob("*.csv"))
+    with csv_path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        rows = list(reader)
+    assert tuple(reader.fieldnames or ()) == TGS_SVM41_CSV_COLUMNS
+    assert not any(
+        column.startswith(("nh3_", "h2s_"))
+        for column in TGS_SVM41_CSV_COLUMNS
+    )
+    assert rows[0]["tgs2620_raw"] == "100"
+    assert rows[0]["svm41_temperature_c"] == "24.0"
+    assert "nh3" not in terminal[1].lower()
+    assert "h2s" not in terminal[1].lower()
+
+    metadata_path = next(tmp_path.glob("*.metadata.json"))
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    assert metadata["mode"] == "acquire-tgs-svm41"
+    assert metadata["enabled_devices"] == ["ads7828", "svm41"]
+    assert "nh3" not in metadata["effective_configuration"]
+    assert "h2s" not in metadata["effective_configuration"]
 
 
 def test_ctrl_c_stops_svm41_and_closes_outputs(tmp_path) -> None:
