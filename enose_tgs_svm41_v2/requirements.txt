@@ -1,0 +1,8 @@
+pandas
+numpy
+scipy
+scikit-learn
+joblib
+matplotlib
+smbus2
+sensirion-uart-svm4x
