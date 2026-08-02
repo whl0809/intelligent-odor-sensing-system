@@ -1,0 +1,51 @@
+schema_version = 1
+
+[acquisition]
+bus = 1
+interval_s = 1.0
+output_dir = "data/raw"
+flush_rows = 10
+retries = 0
+
+[sht45]
+enabled = true
+required = true
+address = 0x44
+
+[ads7828]
+enabled = true
+required = true
+address = 0x48
+saturation_low = 1
+saturation_high = 4094
+
+[sgp41]
+enabled = true
+required = true
+address = 0x59
+conditioning_s = 10.0
+
+[nh3]
+enabled = true
+required = true
+address = 0x69
+resolution_bits = 18
+gain = 1
+continuous = true
+
+[h2s]
+enabled = true
+required = true
+address = 0x6A
+resolution_bits = 18
+gain = 1
+continuous = true
+
+[bme690]
+enabled = true
+required = false
+address = 0x76
+heater_temperature_c = 320
+heater_duration_ms = 150
+profile = "forced"
+
