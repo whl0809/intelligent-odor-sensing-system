@@ -6,7 +6,7 @@ The live display workflow has two processes:
    the acquisition CSV, classifies the latest input window at the selected
    update interval, and atomically publishes the newest result to
    `runtime/display_state.json`.
-2. `tools/co5300_dashboard.py` watches that JSON file and sends a rendered
+2. `extras/food_freshness/tools/co5300_dashboard.py` watches that JSON file and sends a rendered
    RGB565 frame to the CO5300 over software QSPI.
 
 Keeping display transfer outside the acquisition process prevents a slow
@@ -35,14 +35,14 @@ installed by `apt`.
 With the virtual environment active:
 
 ```bash
-bash tools/run_acquire_classify_display.sh
+bash extras/food_freshness/tools/run_acquire_classify_display.sh
 ```
 
 Press `Ctrl+C` to stop both processes and close the CSV cleanly. For a bounded
 hardware test:
 
 ```bash
-bash tools/run_acquire_classify_display.sh --frames 70
+bash extras/food_freshness/tools/run_acquire_classify_display.sh --frames 70
 ```
 
 The display initially reports that it is collecting samples. The first
@@ -53,7 +53,7 @@ The launcher forwards classifier options. For example, to classify the latest
 30 rows every 5 new rows:
 
 ```bash
-bash tools/run_acquire_classify_display.sh \
+bash extras/food_freshness/tools/run_acquire_classify_display.sh \
   --classification-window-rows 30 \
   --classification-update-rows 5
 ```
@@ -78,8 +78,8 @@ confidence values are model outputs, not calibrated gas concentrations.
 Pillow can render the example state to a PNG:
 
 ```bash
-python3 tools/co5300_dashboard.py \
-  --state-file config/display_state.example.json \
+python3 extras/food_freshness/tools/co5300_dashboard.py \
+  --state-file extras/food_freshness/config/display_state.example.json \
   --preview dashboard_preview.png
 ```
 
@@ -88,11 +88,11 @@ The preview path does not access GPIO.
 ## Verify the display before live acquisition
 
 Follow the wiring and bring-up procedure in
-`docs/CO5300_RPI_QSPI.md`, then run:
+`extras/food_freshness/docs/CO5300_RPI_QSPI.md`, then run:
 
 ```bash
-python3 tools/co5300_qspi_test.py --self-test
-sudo ./tools/run_co5300_qspi.sh
+python3 extras/food_freshness/tools/co5300_qspi_test.py --self-test
+sudo ./extras/food_freshness/tools/run_co5300_qspi.sh
 ```
 
 Confirm the color-bar pattern and TE activity before starting the live
@@ -100,7 +100,7 @@ classifier.
 
 ## Published state format
 
-`config/display_state.example.json` documents the JSON contract. The live
+`extras/food_freshness/config/display_state.example.json` documents the JSON contract. The live
 command writes the following fields atomically:
 
 ```text

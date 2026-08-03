@@ -22,50 +22,38 @@ python -m pip install -e .
 python -m enose probe --config config/rpi5.toml
 python -m enose diagnose --config config/rpi5.toml
 python -m enose acquire --config config/rpi5.toml
-python -m enose acquire-no-sgp41-bme690-sht45 --config config/rpi5.toml
-python -m enose acquire-no-sgp41-bme690-sht45-with-svm41 \
-  --config config/rpi5.toml --uart /dev/ttyUSB0
-python -m enose acquire-tgs-svm41 \
-  --config config/rpi5.toml --uart /dev/ttyUSB0
 ```
 
 Use `--verbose` after the subcommand for byte-level diagnostics. A bounded
 acquisition can be run with `--frames 60`.
 
-Both standard acquisition commands print every CSV field for each frame while
-writing the same frame to disk. `acquire` uses all enabled sensors on both
-PCBs. `acquire-no-sgp41-bme690-sht45` records only all six TGS/ADS7828
-channels, NH3, and H2S. It disables SGP41, BME690, and SHT45; those devices
-do not appear in that mode's terminal rows or CSV columns, and no SVM41 is
-used.
-
-To collect the same reduced TGS/ADS7828, NH3, and H2S fields together with
-SVM41 UART values, run:
+`acquire` is the only raw data-acquisition mode. Select any combination with a
+comma-separated `--sensors` value. Valid names are `tgs`, `nh3`, `h2s`,
+`bme690`, `sgp41`, `sht45`, and `svm41`:
 
 ```bash
-python -m enose acquire-no-sgp41-bme690-sht45-with-svm41 \
+python -m enose acquire \
   --config config/rpi5.toml \
+  --sensors tgs,nh3,h2s,svm41 \
   --uart /dev/ttyUSB0
 ```
 
-This mode additionally records SVM41 temperature, relative humidity, VOC
-Index, and NOx Index. SGP41, BME690, and SHT45 remain disabled and absent from
-the terminal and CSV. Use `--frames 60` for a bounded run; otherwise it
-continues until Ctrl+C. An ADS7828, MCP3421, or SVM41 read failure leaves only
-that device's fields empty while the other devices continue.
-
-To collect only the six TGS/ADS7828 channels and SVM41 UART values, without
-initializing or logging NH3 or H2S, run:
+Omitting `--sensors` selects the I2C sensors enabled in `config/rpi5.toml` and
+does not add SVM41. Use `--sensors all` for all seven choices. For example,
+TGS and SVM41 only is:
 
 ```bash
-python -m enose acquire-tgs-svm41 \
+python -m enose acquire \
   --config config/rpi5.toml \
+  --sensors tgs,svm41 \
   --uart /dev/ttyUSB0
 ```
 
-This mode omits NH3, H2S, SGP41, BME690, and SHT45 from both terminal output
-and CSV. Use `--frames 60` for a bounded run; otherwise it continues until
-Ctrl+C.
+Only selected sensors are initialized and only their columns appear in the
+terminal and CSV. Each file uses a descriptive name such as
+`enose_raw_tgs-nh3-h2s-svm41_20260802T120000_000000Z.csv`, with a matching
+metadata JSON. Use `--frames 60` for a bounded run; otherwise acquisition
+continues until Ctrl+C.
 
 The BME690 driver uses Bosch Sensortec's official BME690 SensorAPI v1.1.0
 through a small native extension built during installation. It runs the sensor
@@ -77,20 +65,10 @@ Sensirion's official `sensirion-gas-index-algorithm` package processes each
 new 1 Hz SGP41 raw sample into VOC Index and NOx Index while preserving both
 raw signals. These indices are not ppm or concentration measurements.
 
-## NH3, H2S, and SVM41 UART mode
+## SVM41 UART wiring
 
-The isolated `acquire-svm41` mode records only the two existing MCP3421
-channels and a Sensirion SVM41 module:
-
-```bash
-python -m enose acquire-svm41 \
-  --config config/rpi5.toml \
-  --uart /dev/ttyUSB0
-```
-
-It runs continuously at 1 Hz until Ctrl+C, prints every frame, and writes a
-timestamped `enose_nh3_h2s_svm41_*.csv` plus metadata in `data/raw/`.
-VOC Index and NOx Index are dimensionless indices, not ppm or concentration.
+SVM41 temperature, humidity, VOC Index, and NOx Index can be included in any
+acquisition selection. The indices are dimensionless, not ppm or concentration.
 
 Keep NH3 (`0x69`) and H2S (`0x6A`) on `/dev/i2c-1`. The SVM41 module also uses
 `0x6A` in I2C mode, so it must not be connected to that I2C bus. Connect the
@@ -133,8 +111,8 @@ python -m pip install -e .
 ## Food and freshness classification
 
 The shared classifier supports both live inference and offline processing of a
-CSV created by `acquire-no-sgp41-bme690-sht45`. Classification does not change
-the acquisition CSV or the sensor-reading schedule.
+CSV containing TGS, NH3, and H2S fields. Classification does not change the
+acquisition CSV or the sensor-reading schedule.
 
 Install the optional ML dependencies:
 
@@ -179,25 +157,26 @@ With the project virtual environment active, start the display, acquisition,
 and classifier together:
 
 ```bash
-bash tools/run_acquire_classify_display.sh
+bash extras/food_freshness/tools/run_acquire_classify_display.sh
 ```
 
 The display shows food type, freshness, combined class, all three model
 confidences, valid rows in the current classification input, model-window
 count, and the current NH3/H2S differential voltages. The dashboard runs
 separately from the 1 Hz acquisition loop, so a slow software-QSPI refresh
-does not delay sensor sampling. See `docs/CO5300_DASHBOARD.md` for wiring and
-preview commands.
+does not delay sensor sampling. See
+`extras/food_freshness/docs/CO5300_DASHBOARD.md` for wiring and preview
+commands.
 
 To classify a previously completed CSV instead, run:
 
 ```bash
-python tools/classify_food_freshness.py \
-  data/raw/enose_20260728T120000_000000Z.csv
+python extras/food_freshness/tools/classify_csv.py \
+  data/raw/enose_raw_tgs-nh3-h2s_20260802T120000_000000Z.csv
 ```
 
 The utility writes per-window predictions and an overall JSON summary under
 `data/classification/<csv filename>/`. Its fixed training baseline and three
-model artifacts are in `models/food_freshness/`. Joblib model files use Python
-pickle internally, so load only repository artifacts whose provenance is
-trusted.
+model artifacts and historical training inputs are grouped under
+`extras/food_freshness/`. Joblib model files use Python pickle internally, so
+load only repository artifacts whose provenance is trusted.

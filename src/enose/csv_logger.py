@@ -11,59 +11,97 @@ from typing import Any
 
 from .records import Frame
 
-CSV_SCHEMA_VERSION = 1
-CSV_COLUMNS = (
+CSV_SCHEMA_VERSION = 2
+ACQUISITION_SENSOR_NAMES = (
+    "tgs",
+    "nh3",
+    "h2s",
+    "bme690",
+    "sgp41",
+    "sht45",
+    "svm41",
+)
+TIMING_CSV_COLUMNS = (
     "timestamp_utc",
     "elapsed_s",
     "sequence",
     "frame_duration_ms",
     "deadline_miss_ms",
-    "sht45_temperature_c",
-    "sht45_relative_humidity_pct",
-    "sht45_ok",
-    "tgs2620_raw",
-    "tgs2620_voltage_v",
-    "tgs2610_raw",
-    "tgs2610_voltage_v",
-    "tgs2611_raw",
-    "tgs2611_voltage_v",
-    "tgs2600_raw",
-    "tgs2600_voltage_v",
-    "tgs2602_raw",
-    "tgs2602_voltage_v",
-    "tgs2603_raw",
-    "tgs2603_voltage_v",
-    "ads7828_ok",
-    "nh3_raw",
-    "nh3_diff_voltage_v",
-    "nh3_ok",
-    "h2s_raw",
-    "h2s_diff_voltage_v",
-    "h2s_ok",
-    "sgp41_sraw_voc",
-    "sgp41_sraw_nox",
-    "sgp41_voc_index",
-    "sgp41_nox_index",
-    "sgp41_compensated",
-    "sgp41_ok",
-    "bme690_temperature_c",
-    "bme690_relative_humidity_pct",
-    "bme690_pressure_pa",
-    "bme690_gas_resistance_ohm",
-    "bme690_gas_valid",
-    "bme690_heater_stable",
-    "bme690_ok",
-    "error_codes",
 )
-NO_SGP41_BME690_SHT45_CSV_COLUMNS = tuple(
-    column
-    for column in CSV_COLUMNS
-    if not column.startswith(("sgp41_", "bme690_", "sht45_"))
-)
+SENSOR_CSV_COLUMNS = {
+    "tgs": (
+        "tgs2620_raw",
+        "tgs2620_voltage_v",
+        "tgs2610_raw",
+        "tgs2610_voltage_v",
+        "tgs2611_raw",
+        "tgs2611_voltage_v",
+        "tgs2600_raw",
+        "tgs2600_voltage_v",
+        "tgs2602_raw",
+        "tgs2602_voltage_v",
+        "tgs2603_raw",
+        "tgs2603_voltage_v",
+        "ads7828_ok",
+    ),
+    "nh3": ("nh3_raw", "nh3_diff_voltage_v", "nh3_ok"),
+    "h2s": ("h2s_raw", "h2s_diff_voltage_v", "h2s_ok"),
+    "bme690": (
+        "bme690_temperature_c",
+        "bme690_relative_humidity_pct",
+        "bme690_pressure_pa",
+        "bme690_gas_resistance_ohm",
+        "bme690_gas_valid",
+        "bme690_heater_stable",
+        "bme690_ok",
+    ),
+    "sgp41": (
+        "sgp41_sraw_voc",
+        "sgp41_sraw_nox",
+        "sgp41_voc_index",
+        "sgp41_nox_index",
+        "sgp41_compensated",
+        "sgp41_ok",
+    ),
+    "sht45": (
+        "sht45_temperature_c",
+        "sht45_relative_humidity_pct",
+        "sht45_ok",
+    ),
+    "svm41": (
+        "svm41_temperature_c",
+        "svm41_relative_humidity_pct",
+        "svm41_voc_index",
+        "svm41_nox_index",
+        "svm41_ok",
+    ),
+}
+
+
+def columns_for_sensors(sensor_names: set[str] | tuple[str, ...]) -> tuple[str, ...]:
+    selected = set(sensor_names)
+    unknown = selected.difference(ACQUISITION_SENSOR_NAMES)
+    if unknown:
+        raise ValueError(f"unknown acquisition sensors: {', '.join(sorted(unknown))}")
+    return (
+        *TIMING_CSV_COLUMNS,
+        *(
+            column
+            for name in ACQUISITION_SENSOR_NAMES
+            if name in selected
+            for column in SENSOR_CSV_COLUMNS[name]
+        ),
+        "error_codes",
+    )
+
+
+CSV_COLUMNS = columns_for_sensors(ACQUISITION_SENSOR_NAMES[:-1])
+ALL_CSV_COLUMNS = columns_for_sensors(ACQUISITION_SENSOR_NAMES)
+CLASSIFICATION_CSV_COLUMNS = columns_for_sensors(("tgs", "nh3", "h2s"))
 
 
 def frame_to_row(frame: Frame) -> dict[str, object]:
-    row: dict[str, object] = {column: "" for column in CSV_COLUMNS}
+    row: dict[str, object] = {column: "" for column in ALL_CSV_COLUMNS}
     row.update(
         {
             "timestamp_utc": frame.timestamp_utc,
@@ -77,6 +115,7 @@ def frame_to_row(frame: Frame) -> dict[str, object]:
             "h2s_ok": frame.h2s is not None,
             "sgp41_ok": frame.sgp41 is not None,
             "bme690_ok": frame.bme690 is not None,
+            "svm41_ok": frame.svm41 is not None,
             "error_codes": ";".join(frame.error_codes),
         }
     )
@@ -110,6 +149,11 @@ def frame_to_row(frame: Frame) -> dict[str, object]:
         row["bme690_gas_resistance_ohm"] = frame.bme690.gas_resistance_ohm
         row["bme690_gas_valid"] = frame.bme690.gas_valid
         row["bme690_heater_stable"] = frame.bme690.heater_stable
+    if frame.svm41 is not None:
+        row["svm41_temperature_c"] = frame.svm41.temperature_c
+        row["svm41_relative_humidity_pct"] = frame.svm41.relative_humidity_pct
+        row["svm41_voc_index"] = frame.svm41.voc_index
+        row["svm41_nox_index"] = frame.svm41.nox_index
     return row
 
 
@@ -141,7 +185,8 @@ class CSVLogger:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         started = self.start_time or datetime.now(UTC)
         self.start_time = started
-        stem = started.strftime("enose_%Y%m%dT%H%M%S_%fZ")
+        sensor_slug = "-".join(self.enabled_devices)
+        stem = started.strftime(f"enose_raw_{sensor_slug}_%Y%m%dT%H%M%S_%fZ")
         self.path = self.output_dir / f"{stem}.csv"
         self.metadata_path = self.output_dir / f"{stem}.metadata.json"
         self._handle = self.path.open("x", newline="", encoding="utf-8")

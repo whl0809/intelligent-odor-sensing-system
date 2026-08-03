@@ -10,12 +10,12 @@ from enose.classification import (
     FoodFreshnessClassifier,
     SlidingWindowClassifier,
 )
-from enose.csv_logger import NO_SGP41_BME690_SHT45_CSV_COLUMNS
+from enose.csv_logger import CLASSIFICATION_CSV_COLUMNS
 from enose.records import Frame
 
 
 ROOT = Path(__file__).resolve().parents[1]
-MODEL_DIR = ROOT / "models" / "food_freshness"
+MODEL_DIR = ROOT / "extras" / "food_freshness" / "artifacts"
 EXPECTED_HASHES = {
     "freshness_best_model.joblib": (
         "eec2edf311a853994b8b47e56c4cfe47e4556b8d2d61fdc2156ad816fa1bb6cf"
@@ -39,7 +39,7 @@ def test_classification_metadata_matches_reduced_acquisition_csv() -> None:
     assert metadata["window_size"] == 20
     assert metadata["window_stride"] == 5
     assert set(metadata["selected_channels"].values()).issubset(
-        NO_SGP41_BME690_SHT45_CSV_COLUMNS
+        CLASSIFICATION_CSV_COLUMNS
     )
     assert set(metadata["baseline_means"]) == set(
         metadata["selected_channels"]

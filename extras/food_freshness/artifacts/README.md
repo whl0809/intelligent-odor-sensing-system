@@ -1,7 +1,7 @@
 # Food and freshness model artifacts
 
-These artifacts were supplied for offline inference on CSV files produced by
-`acquire-no-sgp41-bme690-sht45`.
+These artifacts were supplied for inference on CSV files containing the TGS,
+NH3, and H2S fields selected by the unified `acquire` command.
 
 The metadata selects seven voltage channels:
 

@@ -12,7 +12,10 @@ from .records import Frame
 
 
 DEFAULT_ARTIFACT_DIR = (
-    Path(__file__).resolve().parents[2] / "models" / "food_freshness"
+    Path(__file__).resolve().parents[2]
+    / "extras"
+    / "food_freshness"
+    / "artifacts"
 )
 MODEL_FILENAMES = {
     "combined_class": "combined_class_best_model.joblib",

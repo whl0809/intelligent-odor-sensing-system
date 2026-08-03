@@ -10,16 +10,17 @@ import pytest
 import enose.acquisition as acquisition_module
 from enose.acquisition import Acquisition, Sensors
 from enose.cli import (
+    _config_for_sensors,
     _format_frame,
     _parser,
     _update_live_classification,
-    _without_sgp41_bme690_sht45,
 )
 from enose.config import load_config
 from enose.csv_logger import (
+    CLASSIFICATION_CSV_COLUMNS,
     CSV_COLUMNS,
-    NO_SGP41_BME690_SHT45_CSV_COLUMNS,
     CSVLogger,
+    columns_for_sensors,
     frame_to_row,
 )
 from enose.records import (
@@ -28,6 +29,7 @@ from enose.records import (
     MCP3421Sample,
     SGP41Sample,
     SHT45Sample,
+    SVM41Sample,
 )
 from conftest import FakeClock
 
@@ -297,10 +299,10 @@ def test_terminal_format_uses_csv_order_and_marks_missing_values() -> None:
     assert fields[-1] == "error_codes=sgp41_nack"
 
 
-def test_reduced_mode_disables_sgp41_bme690_and_sht45() -> None:
+def test_sensor_selection_disables_every_unselected_device() -> None:
     config = _test_config()
 
-    result = _without_sgp41_bme690_sht45(config)
+    result = _config_for_sensors(config, ("tgs", "nh3", "h2s"))
 
     assert result.sgp41.enabled is False
     assert result.sgp41.required is False
@@ -316,22 +318,49 @@ def test_reduced_mode_disables_sgp41_bme690_and_sht45() -> None:
     assert config.sht45.enabled is True
 
 
-def test_reduced_mode_command_name_replaces_old_name() -> None:
+def test_unified_acquire_parser_selects_sensors_and_rejects_old_modes() -> None:
     args = _parser().parse_args(
         [
-            "acquire-no-sgp41-bme690-sht45",
+            "acquire",
             "--config",
             "config/rpi5.toml",
+            "--sensors",
+            "SVM41,tgs,nh3",
+            "--uart",
+            "/dev/ttyUSB2",
             "--frames",
-            "1",
+            "20",
         ]
     )
 
-    assert args.command == "acquire-no-sgp41-bme690-sht45"
-    with pytest.raises(SystemExit):
-        _parser().parse_args(
-            ["acquire-no-sgp41-bme690", "--config", "config/rpi5.toml"]
-        )
+    assert args.command == "acquire"
+    assert args.sensors == ("tgs", "nh3", "svm41")
+    assert args.uart == "/dev/ttyUSB2"
+    assert args.frames == 20
+
+    all_args = _parser().parse_args(
+        ["acquire", "--config", "config/rpi5.toml", "--sensors", "all"]
+    )
+    assert all_args.sensors == (
+        "tgs",
+        "nh3",
+        "h2s",
+        "bme690",
+        "sgp41",
+        "sht45",
+        "svm41",
+    )
+
+    for old_command in (
+        "acquire-no-sgp41-bme690-sht45",
+        "acquire-no-sgp41-bme690-sht45-with-svm41",
+        "acquire-tgs-svm41",
+        "acquire-svm41",
+    ):
+        with pytest.raises(SystemExit):
+            _parser().parse_args(
+                [old_command, "--config", "config/rpi5.toml"]
+            )
 
     live_args = _parser().parse_args(
         [
@@ -359,40 +388,6 @@ def test_reduced_mode_command_name_replaces_old_name() -> None:
     )
     assert default_live_args.classification_window_rows == 60
     assert default_live_args.classification_update_rows == 10
-
-    svm41_args = _parser().parse_args(
-        [
-            "acquire-no-sgp41-bme690-sht45-with-svm41",
-            "--config",
-            "config/rpi5.toml",
-            "--uart",
-            "/dev/ttyUSB1",
-            "--frames",
-            "30",
-        ]
-    )
-    assert (
-        svm41_args.command
-        == "acquire-no-sgp41-bme690-sht45-with-svm41"
-    )
-    assert svm41_args.uart == "/dev/ttyUSB1"
-    assert svm41_args.frames == 30
-
-    tgs_svm41_args = _parser().parse_args(
-        [
-            "acquire-tgs-svm41",
-            "--config",
-            "config/rpi5.toml",
-            "--uart",
-            "/dev/ttyUSB2",
-            "--frames",
-            "20",
-        ]
-    )
-    assert tgs_svm41_args.command == "acquire-tgs-svm41"
-    assert tgs_svm41_args.uart == "/dev/ttyUSB2"
-    assert tgs_svm41_args.frames == 20
-
 
 def test_live_classification_failure_does_not_stop_acquisition(caplog) -> None:
     class FailingClassifier:
@@ -476,7 +471,7 @@ def test_live_classification_is_printed_and_published(
     assert not list(state_path.parent.glob("*.tmp"))
 
 
-def test_reduced_mode_omits_disabled_sensors_from_output(tmp_path) -> None:
+def test_selected_sensor_schema_controls_terminal_csv_and_filename(tmp_path) -> None:
     frame = Frame(
         timestamp_utc="2026-01-01T00:00:00.000Z",
         elapsed_s=0.0,
@@ -489,29 +484,34 @@ def test_reduced_mode_omits_disabled_sensors_from_output(tmp_path) -> None:
         h2s=None,
         sgp41=SGP41Sample(100, 200, True, 101.0, 2.0),
         bme690=BME690Sample(22.0, 40.0, 101325.0, 50000.0, True, True),
+        svm41=SVM41Sample(24.0, 50.0, 100.0, 1.0),
         error_codes=(),
     )
+    selected = ("tgs", "svm41")
+    columns = columns_for_sensors(selected)
 
-    terminal_line = _format_frame(frame, NO_SGP41_BME690_SHT45_CSV_COLUMNS)
+    terminal_line = _format_frame(frame, columns)
     assert "sgp41" not in terminal_line
     assert "bme690" not in terminal_line
     assert "sht45" not in terminal_line
+    assert "nh3" not in terminal_line
+    assert "h2s" not in terminal_line
+    assert "svm41_temperature_c=24.0" in terminal_line
 
     with CSVLogger(
         tmp_path,
         {"schema_version": 1},
-        ["sht45"],
+        list(selected),
         flush_rows=1,
-        columns=NO_SGP41_BME690_SHT45_CSV_COLUMNS,
+        columns=columns,
+        start_time=datetime(2026, 8, 2, tzinfo=UTC),
     ) as logger:
         logger.write(frame)
         csv_path = logger.path
 
     with csv_path.open(newline="", encoding="utf-8") as handle:
         reader = csv.DictReader(handle)
-        assert tuple(reader.fieldnames or ()) == NO_SGP41_BME690_SHT45_CSV_COLUMNS
+        assert tuple(reader.fieldnames or ()) == columns
         next(reader)
-    assert not any(
-        column.startswith(("sgp41_", "bme690_", "sht45_"))
-        for column in NO_SGP41_BME690_SHT45_CSV_COLUMNS
-    )
+    assert csv_path.name.startswith("enose_raw_tgs-svm41_20260802T000000_")
+    assert columns != CLASSIFICATION_CSV_COLUMNS

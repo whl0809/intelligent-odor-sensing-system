@@ -16,12 +16,12 @@ Default independent BCM GPIO wiring:
     TE   = 24
 
 Repository location:
-    ECE450_software/tools/co5300_qspi_test.py
+    ECE450_software/extras/food_freshness/tools/co5300_qspi_test.py
 
 Examples:
-    sudo python3 tools/co5300_qspi_test.py --self-test
-    sudo python3 tools/co5300_qspi_test.py \
-        --init config/co5300_init.json --pattern bars --hold
+    sudo python3 extras/food_freshness/tools/co5300_qspi_test.py --self-test
+    sudo python3 extras/food_freshness/tools/co5300_qspi_test.py \
+        --init extras/food_freshness/config/co5300_init.json --pattern bars --hold
 """
 
 from __future__ import annotations
@@ -38,6 +38,8 @@ from collections import namedtuple
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Sequence
+
+EXTRA_ROOT = Path(__file__).resolve().parents[1]
 
 
 WIDTH = 410
@@ -541,7 +543,10 @@ def build_parser() -> argparse.ArgumentParser:
             "through Raspberry Pi GPIO."
         )
     )
-    parser.add_argument("--init", default="config/co5300_init.json")
+    parser.add_argument(
+        "--init",
+        default=str(EXTRA_ROOT / "config" / "co5300_init.json"),
+    )
     parser.add_argument("--gpiochip", default="auto",
                         help="gpiochip number, or auto (default)")
     parser.add_argument("--clk", type=int, default=21)

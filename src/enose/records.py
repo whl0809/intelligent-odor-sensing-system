@@ -54,6 +54,14 @@ class BME690Sample:
 
 
 @dataclass(frozen=True)
+class SVM41Sample:
+    temperature_c: float
+    relative_humidity_pct: float
+    voc_index: float
+    nox_index: float
+
+
+@dataclass(frozen=True)
 class Frame:
     timestamp_utc: str
     elapsed_s: float
@@ -66,5 +74,5 @@ class Frame:
     h2s: MCP3421Sample | None
     sgp41: SGP41Sample | None
     bme690: BME690Sample | None
+    svm41: SVM41Sample | None = None
     error_codes: tuple[str, ...] = ()
-

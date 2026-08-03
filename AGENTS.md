@@ -255,12 +255,13 @@ README.md
 pyproject.toml
 config/rpi5.toml
 hardware/
-models/
+extras/
   food_freshness/
-    dataset_and_preprocessing_metadata.json
-    combined_class_best_model.joblib
-    food_type_best_model.joblib
-    freshness_best_model.joblib
+    artifacts/
+    training_data/
+    config/
+    docs/
+    tools/
 src/enose/
   __init__.py
   cli.py
@@ -276,25 +277,18 @@ src/enose/
   bme690.py
   classification.py
   svm41_uart.py
-  svm41_acquisition.py
 tests/
-tools/
-  classify_food_freshness.py
-  co5300_dashboard.py
-  co5300_qspi_test.py
-  run_acquire_classify_display.sh
-docs/
-  CO5300_DASHBOARD.md
-  CO5300_RPI_QSPI.md
 data/raw/
 ```
 
 Do not add more layers or directories without a concrete need.
 
-Keep offline food/freshness classification isolated from acquisition. Store
-its fixed metadata and model artifacts under `models/food_freshness/`, and run
-completed CSV files through `tools/classify_food_freshness.py`. Do not load
-untrusted joblib/pickle artifacts.
+Keep the optional food/freshness pipeline isolated under
+`extras/food_freshness/`. Store its fixed metadata and trusted model artifacts
+under `artifacts/`, historical inputs under `training_data/`, and its display
+utilities/configuration/documentation in the matching subdirectories. Run
+completed CSV files through `extras/food_freshness/tools/classify_csv.py`. Do
+not load untrusted joblib/pickle artifacts.
 
 The live classification path uses the reduced ADS7828/TGS, NH3, and H2S
 acquisition configuration. Load model artifacts once. Use a configurable
@@ -304,7 +298,8 @@ Keep classification failures from stopping CSV acquisition.
 
 For CO5300 visualization, publish classification state atomically and keep the
 software-QSPI dashboard in a separate process so display transfer time cannot
-delay 1 Hz sensor acquisition. `tools/run_acquire_classify_display.sh` is the
+delay 1 Hz sensor acquisition.
+`extras/food_freshness/tools/run_acquire_classify_display.sh` is the
 one-command launcher for this workflow.
 
 ## CLI
@@ -314,30 +309,20 @@ Implement:
 ```bash
 python -m enose probe --config config/rpi5.toml
 python -m enose diagnose --config config/rpi5.toml
-python -m enose acquire --config config/rpi5.toml
-python -m enose acquire-no-sgp41-bme690-sht45 --config config/rpi5.toml
-python -m enose acquire-no-sgp41-bme690-sht45-with-svm41 --config config/rpi5.toml --uart /dev/ttyUSB0
-python -m enose acquire-tgs-svm41 --config config/rpi5.toml --uart /dev/ttyUSB0
+python -m enose acquire --config config/rpi5.toml [--sensors tgs,nh3,h2s,bme690,sgp41,sht45,svm41] [--uart /dev/ttyUSB0]
 python -m enose acquire-classify --config config/rpi5.toml [--classification-window-rows N] [--classification-update-rows N] [--display-state PATH]
-python -m enose acquire-svm41 --config config/rpi5.toml --uart /dev/ttyUSB0
 ```
 
 - `probe`: check expected addresses and identities; concise table.
 - `diagnose`: one complete read from enabled devices; detailed bytes only with `--verbose`.
-- `acquire`: continuous time-series recording and terminal output; default one frame per second.
-- `acquire-no-sgp41-bme690-sht45`: records ADS7828/TGS, NH3, and H2S only.
-  SGP41, BME690, and SHT45 are disabled and omitted from terminal and CSV
-  output; no SVM41.
-- `acquire-no-sgp41-bme690-sht45-with-svm41`: records the same ADS7828/TGS,
-  NH3, and H2S fields plus SVM41 temperature, humidity, VOC Index, and NOx
-  Index over UART. SGP41, BME690, and SHT45 remain omitted.
-- `acquire-tgs-svm41`: records ADS7828/TGS plus SVM41 temperature, humidity,
-  VOC Index, and NOx Index over UART. It does not initialize or expose NH3,
-  H2S, SGP41, BME690, or SHT45.
+- `acquire`: the only raw acquisition mode. It records any command-line
+  selection of `tgs`, `nh3`, `h2s`, `bme690`, `sgp41`, `sht45`, and `svm41`
+  in one synchronous loop. Omit `--sensors` to use the configuration-enabled
+  I2C devices; SVM41 must then be selected explicitly. Only selected sensors
+  appear in terminal and CSV output.
 - `acquire-classify`: the same reduced acquisition plus persistent live
   food/freshness classification with configurable input/update row counts,
   defaulting to a 60-row input updated every 10 frames.
-- `acquire-svm41`: isolated 1 Hz NH3/H2S I2C plus SVM41 UART recording until Ctrl+C.
 
 Required devices may fail the command. Optional device failures must be reported without blocking the remaining sensors.
 
@@ -351,9 +336,10 @@ Prefer this synchronous order:
 4. Read all six ADS7828 channels.
 5. Read NH3 and H2S MCP3421 values.
 6. Read BME690.
-7. Assemble one immutable frame.
-8. Write one CSV row.
-9. Sleep until the next absolute monotonic deadline.
+7. Read SVM41 over UART when selected.
+8. Assemble one immutable frame.
+9. Write one CSV row.
+10. Sleep until the next absolute monotonic deadline.
 
 Do not use `sleep(1)` after each completed frame because that accumulates drift. Advance from absolute deadlines.
 
@@ -361,7 +347,9 @@ Never reuse a previous sensor value as if it were current.
 
 ## CSV contract
 
-Create a timestamped file in `data/raw/`, one row per logical frame, UTC ISO-8601 timestamps with `Z`.
+Create a timestamped file in `data/raw/`, one row per logical frame, UTC
+ISO-8601 timestamps with `Z`. Raw filenames include the selected sensors, for
+example `enose_raw_tgs-nh3-svm41_<timestamp>.csv`.
 
 Minimum fields:
 
@@ -393,12 +381,19 @@ bme690_gas_valid
 bme690_heater_stable
 bme690_ok
 
+svm41_temperature_c
+svm41_relative_humidity_pct
+svm41_voc_index
+svm41_nox_index
+svm41_ok
+
 error_codes
 ```
 
 Rules:
 
 - Missing values are empty/NaN, not zero.
+- Include only the column groups for sensors selected by `acquire`.
 - `*_ok` means the frame contains a new valid sample.
 - Never substitute a stale value after a failed read.
 - `error_codes` uses concise machine-readable codes separated by semicolons.

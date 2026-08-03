@@ -8,7 +8,7 @@ import pytest
 
 pytest.importorskip("PIL")
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "tools"))
+sys.path.insert(0, str(ROOT / "extras" / "food_freshness" / "tools"))
 
 from co5300_dashboard import (  # noqa: E402
     HEIGHT,
@@ -20,7 +20,13 @@ from co5300_dashboard import (  # noqa: E402
 
 
 def test_classification_display_state_renders_to_panel_dimensions() -> None:
-    state = load_state(ROOT / "config" / "display_state.example.json")
+    state = load_state(
+        ROOT
+        / "extras"
+        / "food_freshness"
+        / "config"
+        / "display_state.example.json"
+    )
 
     assert state.food_type == "Banana"
     assert state.combined_class == "Fresh Banana"

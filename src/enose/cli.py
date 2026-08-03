@@ -13,11 +13,13 @@ from typing import Any, Sequence
 from .acquisition import Acquisition, Sensors
 from .ads7828 import ADS7828
 from .bme690 import BME690
-from .config import AppConfig, DeviceConfig, load_config
+from .config import AppConfig, load_config
 from .csv_logger import (
+    ACQUISITION_SENSOR_NAMES,
+    CLASSIFICATION_CSV_COLUMNS,
     CSV_COLUMNS,
-    NO_SGP41_BME690_SHT45_CSV_COLUMNS,
     CSVLogger,
+    columns_for_sensors,
     frame_to_row,
 )
 from .i2c_bus import DriverError, I2CBus
@@ -25,32 +27,50 @@ from .mcp3421 import MCP3421
 from .records import Frame
 from .sgp41 import SGP41
 from .sht45 import SHT45
-from .svm41_acquisition import run_svm41_acquisition
+from .svm41_uart import SVM41UART, UART_BAUDRATE
 
 LOGGER = logging.getLogger(__name__)
-REDUCED_ACQUISITION_COMMANDS = {
-    "acquire-no-sgp41-bme690-sht45",
-    "acquire-classify",
-}
-REDUCED_SVM41_COMMAND = "acquire-no-sgp41-bme690-sht45-with-svm41"
-TGS_SVM41_COMMAND = "acquire-tgs-svm41"
+I2C_SENSOR_NAMES = frozenset(ACQUISITION_SENSOR_NAMES) - {"svm41"}
+
+
+def _parse_sensor_selection(value: str) -> tuple[str, ...]:
+    requested = {item.strip().lower() for item in value.split(",") if item.strip()}
+    if requested == {"all"}:
+        requested = set(ACQUISITION_SENSOR_NAMES)
+    unknown = requested.difference(ACQUISITION_SENSOR_NAMES)
+    if unknown:
+        choices = ",".join(ACQUISITION_SENSOR_NAMES)
+        raise argparse.ArgumentTypeError(
+            f"unknown sensor(s): {', '.join(sorted(unknown))}; choose from {choices}"
+        )
+    if not requested:
+        raise argparse.ArgumentTypeError("--sensors must contain at least one sensor")
+    return tuple(name for name in ACQUISITION_SENSOR_NAMES if name in requested)
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m enose")
     subparsers = parser.add_subparsers(dest="command", required=True)
-    for name in (
-        "probe",
-        "diagnose",
-        "acquire",
-        "acquire-no-sgp41-bme690-sht45",
-        "acquire-classify",
-    ):
+    for name in ("probe", "diagnose", "acquire", "acquire-classify"):
         command = subparsers.add_parser(name)
         command.add_argument("--config", required=True, type=Path)
         command.add_argument("--verbose", action="store_true")
-        if name == "acquire" or name in REDUCED_ACQUISITION_COMMANDS:
+        if name in {"acquire", "acquire-classify"}:
             command.add_argument("--frames", type=int)
+        if name == "acquire":
+            command.add_argument(
+                "--sensors",
+                type=_parse_sensor_selection,
+                help=(
+                    "comma-separated sensors: tgs,nh3,h2s,bme690,sgp41,"
+                    "sht45,svm41; omit to use enabled TOML I2C sensors"
+                ),
+            )
+            command.add_argument(
+                "--uart",
+                default="/dev/ttyUSB0",
+                help="SVM41 UART device (default: /dev/ttyUSB0)",
+            )
         if name == "acquire-classify":
             command.add_argument(
                 "--classification-window-rows",
@@ -69,24 +89,14 @@ def _parser() -> argparse.ArgumentParser:
                 type=Path,
                 help="atomically publish live classification JSON here",
             )
-    svm41 = subparsers.add_parser("acquire-svm41")
-    svm41.add_argument("--config", required=True, type=Path)
-    svm41.add_argument("--uart", default="/dev/ttyUSB0")
-    svm41.add_argument("--verbose", action="store_true")
-    reduced_svm41 = subparsers.add_parser(REDUCED_SVM41_COMMAND)
-    reduced_svm41.add_argument("--config", required=True, type=Path)
-    reduced_svm41.add_argument("--uart", default="/dev/ttyUSB0")
-    reduced_svm41.add_argument("--frames", type=int)
-    reduced_svm41.add_argument("--verbose", action="store_true")
-    tgs_svm41 = subparsers.add_parser(TGS_SVM41_COMMAND)
-    tgs_svm41.add_argument("--config", required=True, type=Path)
-    tgs_svm41.add_argument("--uart", default="/dev/ttyUSB0")
-    tgs_svm41.add_argument("--frames", type=int)
-    tgs_svm41.add_argument("--verbose", action="store_true")
     return parser
 
 
-def build_sensors(config: AppConfig, bus: I2CBus) -> Sensors:
+def build_sensors(
+    config: AppConfig,
+    bus: I2CBus | None,
+    svm41_uart: str | None = None,
+) -> Sensors:
     return Sensors(
         sht45=SHT45(bus, config.sht45.address) if config.sht45.enabled else None,
         ads7828=(
@@ -133,6 +143,7 @@ def build_sensors(config: AppConfig, bus: I2CBus) -> Sensors:
             if config.bme690.enabled
             else None
         ),
+        svm41=SVM41UART(svm41_uart) if svm41_uart is not None else None,
     )
 
 
@@ -191,13 +202,53 @@ def _required_sample_failed(config: AppConfig, row: dict[str, object]) -> bool:
     )
 
 
-def _without_sgp41_bme690_sht45(config: AppConfig) -> AppConfig:
+def _config_for_sensors(
+    config: AppConfig,
+    sensor_names: tuple[str, ...],
+) -> AppConfig:
+    selected = set(sensor_names)
     return replace(
         config,
-        sgp41=replace(config.sgp41, enabled=False, required=False),
-        bme690=replace(config.bme690, enabled=False, required=False),
-        sht45=replace(config.sht45, enabled=False, required=False),
+        ads7828=replace(
+            config.ads7828,
+            enabled="tgs" in selected,
+            required=config.ads7828.required if "tgs" in selected else False,
+        ),
+        nh3=replace(
+            config.nh3,
+            enabled="nh3" in selected,
+            required=config.nh3.required if "nh3" in selected else False,
+        ),
+        h2s=replace(
+            config.h2s,
+            enabled="h2s" in selected,
+            required=config.h2s.required if "h2s" in selected else False,
+        ),
+        bme690=replace(
+            config.bme690,
+            enabled="bme690" in selected,
+            required=config.bme690.required if "bme690" in selected else False,
+        ),
+        sgp41=replace(
+            config.sgp41,
+            enabled="sgp41" in selected,
+            required=config.sgp41.required if "sgp41" in selected else False,
+        ),
+        sht45=replace(
+            config.sht45,
+            enabled="sht45" in selected,
+            required=config.sht45.required if "sht45" in selected else False,
+        ),
     )
+
+
+def _default_acquisition_sensors(config: AppConfig) -> tuple[str, ...]:
+    enabled = {
+        "tgs" if name == "ads7828" else name
+        for name, device in config.devices.items()
+        if device.enabled
+    }
+    return tuple(name for name in ACQUISITION_SENSOR_NAMES if name in enabled)
 
 
 def _format_frame(
@@ -356,16 +407,23 @@ def _acquire(
     config: AppConfig,
     sensors: Sensors,
     max_frames: int | None,
-    columns: tuple[str, ...] = CSV_COLUMNS,
+    sensor_names: tuple[str, ...],
+    columns: tuple[str, ...],
+    svm41_uart: str | None = None,
     on_frame: Callable[[Frame], None] | None = None,
 ) -> int:
     if max_frames is not None and max_frames < 1:
         raise ValueError("--frames must be at least 1")
-    enabled = [name for name, device in config.devices.items() if device.enabled]
+    effective_config = config.as_dict()
+    if svm41_uart is not None:
+        effective_config["svm41"] = {
+            "uart_device": svm41_uart,
+            "baudrate": UART_BAUDRATE,
+        }
     with CSVLogger(
         Path(config.acquisition.output_dir),
-        effective_config=config.as_dict(),
-        enabled_devices=enabled,
+        effective_config=effective_config,
+        enabled_devices=list(sensor_names),
         flush_rows=config.acquisition.flush_rows,
         columns=columns,
     ) as csv_logger:
@@ -398,62 +456,70 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     try:
         config = load_config(args.config)
-        if args.command in {
-            "acquire-svm41",
-            REDUCED_SVM41_COMMAND,
-            TGS_SVM41_COMMAND,
-        }:
-            try:
-                run_svm41_acquisition(
-                    config,
-                    args.uart,
-                    max_frames=getattr(args, "frames", None),
-                    include_ads7828=args.command != "acquire-svm41",
-                    include_mcp3421=args.command != TGS_SVM41_COMMAND,
+        if args.command in {"probe", "diagnose"}:
+            with I2CBus(config.acquisition.bus) as bus:
+                sensors = build_sensors(config, bus)
+                if args.command == "probe":
+                    return _probe(config, bus, sensors)
+                return _diagnose(config, sensors)
+
+        if args.command == "acquire":
+            sensor_names = args.sensors or _default_acquisition_sensors(config)
+            if not sensor_names:
+                raise ValueError(
+                    "no sensors selected and no I2C sensors are enabled in the config"
                 )
-            except KeyboardInterrupt:
-                print("acquisition stopped", file=sys.stderr)
-                return 130
-            return 0
-        if args.command in REDUCED_ACQUISITION_COMMANDS:
-            config = _without_sgp41_bme690_sht45(config)
+            config = _config_for_sensors(config, sensor_names)
+            columns = columns_for_sensors(sensor_names)
+            svm41_uart = args.uart if "svm41" in sensor_names else None
+            if set(sensor_names).intersection(I2C_SENSOR_NAMES):
+                with I2CBus(config.acquisition.bus) as bus:
+                    sensors = build_sensors(config, bus, svm41_uart)
+                    return _acquire(
+                        config,
+                        sensors,
+                        args.frames,
+                        sensor_names,
+                        columns,
+                        svm41_uart,
+                    )
+            sensors = build_sensors(config, None, svm41_uart)
+            return _acquire(
+                config,
+                sensors,
+                args.frames,
+                sensor_names,
+                columns,
+                svm41_uart,
+            )
+
+        classification_sensors = ("tgs", "nh3", "h2s")
+        config = _config_for_sensors(config, classification_sensors)
         live_classifier = None
         display_state_path = None
-        if args.command == "acquire-classify":
-            try:
-                from .classification import (
-                    FoodFreshnessClassifier,
-                    SlidingWindowClassifier,
-                )
+        try:
+            from .classification import (
+                FoodFreshnessClassifier,
+                SlidingWindowClassifier,
+            )
 
-                live_classifier = SlidingWindowClassifier(
-                    FoodFreshnessClassifier(),
-                    window_rows=args.classification_window_rows,
-                    update_rows=args.classification_update_rows,
+            live_classifier = SlidingWindowClassifier(
+                FoodFreshnessClassifier(),
+                window_rows=args.classification_window_rows,
+                update_rows=args.classification_update_rows,
+            )
+            display_state_path = args.display_state
+            if display_state_path is not None:
+                _write_json_atomic(
+                    display_state_path,
+                    _starting_display_state(args.classification_window_rows),
                 )
-                display_state_path = args.display_state
-                if display_state_path is not None:
-                    _write_json_atomic(
-                        display_state_path,
-                        _starting_display_state(
-                            args.classification_window_rows
-                        ),
-                    )
-            except Exception as exc:
-                raise RuntimeError(
-                    f"classification initialization failed: {exc}"
-                ) from exc
+        except Exception as exc:
+            raise RuntimeError(
+                f"classification initialization failed: {exc}"
+            ) from exc
         with I2CBus(config.acquisition.bus) as bus:
             sensors = build_sensors(config, bus)
-            if args.command == "probe":
-                return _probe(config, bus, sensors)
-            if args.command == "diagnose":
-                return _diagnose(config, sensors)
-            columns = (
-                NO_SGP41_BME690_SHT45_CSV_COLUMNS
-                if args.command in REDUCED_ACQUISITION_COMMANDS
-                else CSV_COLUMNS
-            )
             on_frame = (
                 (
                     lambda frame: _update_live_classification(
@@ -469,8 +535,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 config,
                 sensors,
                 args.frames,
-                columns,
-                on_frame,
+                classification_sensors,
+                CLASSIFICATION_CSV_COLUMNS,
+                on_frame=on_frame,
             )
     except ValueError as exc:
         LOGGER.error("%s", exc)

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+EXTRA_ROOT="$REPO_ROOT/extras/food_freshness"
 cd "$REPO_ROOT"
 
 if [[ -n "${VIRTUAL_ENV:-}" ]]; then
@@ -17,13 +18,13 @@ fi
 
 STATE_FILE="$REPO_ROOT/runtime/display_state.json"
 mkdir -p "$REPO_ROOT/runtime"
-cp "$REPO_ROOT/config/display_state.example.json" "$STATE_FILE.tmp"
+cp "$EXTRA_ROOT/config/display_state.example.json" "$STATE_FILE.tmp"
 mv "$STATE_FILE.tmp" "$STATE_FILE"
 
 sudo -v
-sudo python3 tools/co5300_dashboard.py \
+sudo python3 "$EXTRA_ROOT/tools/co5300_dashboard.py" \
   --state-file "$STATE_FILE" \
-  --init config/co5300_init.json \
+  --init "$EXTRA_ROOT/config/co5300_init.json" \
   --gpiochip auto \
   --clk 21 \
   --sio0 20 \

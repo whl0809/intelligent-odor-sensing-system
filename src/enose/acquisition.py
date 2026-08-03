@@ -32,9 +32,11 @@ from .records import (
     MCP3421Sample,
     SGP41Sample,
     SHT45Sample,
+    SVM41Sample,
 )
 from .sgp41 import SGP41
 from .sht45 import SHT45
+from .svm41_uart import SVM41UART, SVM41_MEASUREMENT_INTERVAL_S
 
 LOGGER = logging.getLogger(__name__)
 T = TypeVar("T")
@@ -48,6 +50,7 @@ class Sensors:
     nh3: MCP3421 | None = None
     h2s: MCP3421 | None = None
     bme690: BME690 | None = None
+    svm41: SVM41UART | None = None
 
 
 def error_suffix(exc: Exception) -> str:
@@ -145,6 +148,18 @@ class Acquisition:
             self._initialize_device(
                 "bme690", self.config.bme690, self.sensors.bme690.initialize
             )
+        if self.sensors.svm41 is not None:
+            try:
+                self.sensors.svm41.start()
+                self._sleep(SVM41_MEASUREMENT_INTERVAL_S)
+            except Exception as exc:
+                LOGGER.exception("svm41 initialization failed")
+                self._persistent_errors.append(f"svm41_{error_suffix(exc)}")
+                try:
+                    self.sensors.svm41.close()
+                except Exception:
+                    LOGGER.exception("svm41 cleanup after initialization failure failed")
+                self.sensors.svm41 = None
 
     def _read(
         self,
@@ -234,6 +249,10 @@ class Acquisition:
         if self.sensors.bme690 is not None:
             bme690_sample = self._read("bme690", self.sensors.bme690.read, errors)
 
+        svm41_sample: SVM41Sample | None = None
+        if self.sensors.svm41 is not None:
+            svm41_sample = self._read("svm41", self.sensors.svm41.read, errors)
+
         frame_end = self._monotonic()
         return Frame(
             timestamp_utc=timestamp,
@@ -247,6 +266,7 @@ class Acquisition:
             h2s=h2s_sample,
             sgp41=sgp41_sample,
             bme690=bme690_sample,
+            svm41=svm41_sample,
             error_codes=tuple(errors),
         )
 
@@ -256,6 +276,15 @@ class Acquisition:
                 self.sensors.sgp41.heater_off()
             except Exception:
                 LOGGER.exception("failed to turn off SGP41 heater")
+        if self.sensors.svm41 is not None:
+            try:
+                self.sensors.svm41.stop()
+            except Exception:
+                LOGGER.exception("failed to stop SVM41 measurement")
+            try:
+                self.sensors.svm41.close()
+            except Exception:
+                LOGGER.exception("failed to close SVM41 UART")
 
     def run(
         self,

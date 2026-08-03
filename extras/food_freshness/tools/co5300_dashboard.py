@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
 """CO5300 dashboard for live ECE450 food/freshness classification.
 
-It reuses the GPIO-QSPI transport in ``tools/co5300_qspi_test.py``.
+It reuses the GPIO-QSPI transport in this optional pipeline directory.
 
 Examples:
     # Show example values once and keep the image on-screen
-    sudo python3 tools/co5300_dashboard.py \
-        --state-file config/display_state.example.json \
+    sudo python3 extras/food_freshness/tools/co5300_dashboard.py \
+        --state-file extras/food_freshness/config/display_state.example.json \
         --once --hold
 
     # Watch a JSON state file and refresh whenever it changes
-    sudo python3 tools/co5300_dashboard.py \
+    sudo python3 extras/food_freshness/tools/co5300_dashboard.py \
         --state-file runtime/display_state.json \
         --refresh-seconds 2
 
     # Generate changing demo values
-    sudo python3 tools/co5300_dashboard.py --demo --refresh-seconds 3
+    sudo python3 extras/food_freshness/tools/co5300_dashboard.py --demo
 """
 
 from __future__ import annotations
@@ -30,6 +30,8 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Sequence
+
+EXTRA_ROOT = Path(__file__).resolve().parents[1]
 
 try:
     from PIL import Image, ImageDraw, ImageFont
@@ -448,8 +450,14 @@ def demo_state(step: int) -> DisplayState:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Show odor-sensing data on a CO5300 AMOLED.")
-    parser.add_argument("--state-file", default="config/display_state.example.json")
-    parser.add_argument("--init", default="config/co5300_init.json")
+    parser.add_argument(
+        "--state-file",
+        default=str(EXTRA_ROOT / "config" / "display_state.example.json"),
+    )
+    parser.add_argument(
+        "--init",
+        default=str(EXTRA_ROOT / "config" / "co5300_init.json"),
+    )
     parser.add_argument("--gpiochip", default="auto")
     parser.add_argument("--clk", type=int, default=21)
     parser.add_argument("--sio0", type=int, default=20)

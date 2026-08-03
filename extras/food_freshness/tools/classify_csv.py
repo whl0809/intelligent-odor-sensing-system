@@ -12,7 +12,7 @@ from enose.classification import (
 )
 
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_OUTPUT_ROOT = REPOSITORY_ROOT / "data" / "classification"
 
 
@@ -23,7 +23,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "csv",
         type=Path,
-        help="CSV produced by acquire-no-sgp41-bme690-sht45",
+        help="completed CSV containing TGS, NH3, and H2S acquisition fields",
     )
     parser.add_argument(
         "--models",
