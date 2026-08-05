@@ -241,6 +241,27 @@ def _print_frame(frame: Frame, columns: tuple[str, ...] = CSV_COLUMNS) -> None:
 
 def _print_classification(frame: Frame, result: dict[str, Any]) -> None:
     predictions = result["predictions"]
+    if "rule_status" in result:
+        averages = result.get("sensor_averages", {})
+        print(
+            " ".join(
+                (
+                    "CLASSIFICATION",
+                    "mode=hard_code",
+                    f"sequence={frame.sequence}",
+                    f"rule_status={result['rule_status']}",
+                    f"confirmed={result.get('confirmed', False)}",
+                    f"food_type={predictions['food_type']['overall_prediction']}",
+                    f"freshness={predictions['freshness']['overall_prediction']}",
+                    f"combined_class={predictions['combined_class']['overall_prediction']}",
+                    f"tgs2603_avg={averages.get('tgs2603_raw', float('nan')):.1f}",
+                    f"tgs2620_avg={averages.get('tgs2620_raw', float('nan')):.1f}",
+                    f"tgs2602_avg={averages.get('tgs2602_raw', float('nan')):.1f}",
+                )
+            ),
+            flush=True,
+        )
+        return
     fields = [
         "CLASSIFICATION",
         f"sequence={frame.sequence}",
