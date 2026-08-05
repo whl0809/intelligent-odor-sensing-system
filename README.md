@@ -45,6 +45,17 @@ python -m enose acquire-classify --config config/rpi5.toml --frames 120 \
   --display-state runtime/display_state.json
 ```
 
+For the normal one-terminal demo, use the launcher instead. It starts the
+CO5300 dashboard in the background, runs TGS+SVM41 acquisition, and stops the
+dashboard when collection ends:
+
+```bash
+bash tools/run_hardcode_food_demo.sh
+```
+
+Pass a different SVM41 serial device as its first argument if needed, for
+example `bash tools/run_hardcode_food_demo.sh /dev/ttyUSB1`.
+
 This command enables the ADS7828 TGS array and SHT45 temperature/humidity:
 NH3 and H2S are explicitly disabled and are neither initialized nor logged. It waits 60 seconds, averages the latest 10 raw readings from TGS2603,
 TGS2620, and TGS2602, and requires five matching rule outputs before showing a
