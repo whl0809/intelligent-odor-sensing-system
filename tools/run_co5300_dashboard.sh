@@ -4,7 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 exec sudo python3 tools/co5300_dashboard.py \
-  --state-file config/display_state.example.json \
+  --state-file runtime/display_state.json \
   --init config/co5300_init.json \
   --gpiochip auto \
   --clk 21 \
@@ -17,5 +17,4 @@ exec sudo python3 tools/co5300_dashboard.py \
   --te 24 \
   --half-period-us 5 \
   --chunk-bytes 1024 \
-  --once \
-  --hold
+  --refresh-seconds 1

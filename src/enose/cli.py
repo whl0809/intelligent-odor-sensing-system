@@ -464,6 +464,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                               None, None, None, None, None, None)
                 if args.display_state is not None:
                     if result is None:
+                        if sequence == 0 or (sequence + 1) % 10 == 0:
+                            progress = min(100, int(elapsed_s / args.classification_min_elapsed_s * 100))
+                            print(
+                                f"COLLECTING elapsed_s={elapsed_s:.0f} "
+                                f"progress={progress}% "
+                                f"tgs2603_raw={tgs2603:.0f}",
+                                flush=True,
+                            )
                         state = {
                             "food_type": "Collecting",
                             "freshness_level": f"{min(int(elapsed_s), 60)}/60 s",
