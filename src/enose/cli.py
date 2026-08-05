@@ -280,22 +280,10 @@ def _build_display_state(
         "input_rows": int(result["raw_rows"]),
         "valid_rows": int(result["valid_rows"]),
         "model_windows": int(result["window_count"]),
-        "nh3_value": (
-            None
-            if frame.nh3 is None
-            else frame.nh3.differential_voltage_v * 1000.0
-        ),
-        "nh3_unit": "mV",
-        "h2s_value": (
-            None
-            if frame.h2s is None
-            else frame.h2s.differential_voltage_v * 1000.0
-        ),
-        "h2s_unit": "mV",
         "system_status": str(result.get("rule_status", "OK" if consistent and complete else "WARNING")),
         "rule_reason": str(result.get("rule_reason", "")),
         "rule_confirmed": bool(result.get("confirmed", False)),
-        "sensor_averages": result.get("sensor_averages", {}),
+        **result.get("sensor_averages", {}),
         "updated_at": frame.timestamp_utc,
     }
 
@@ -333,10 +321,6 @@ def _starting_display_state(window_rows: int) -> dict[str, Any]:
         "input_rows": 0,
         "valid_rows": 0,
         "model_windows": 0,
-        "nh3_value": None,
-        "nh3_unit": "mV",
-        "h2s_value": None,
-        "h2s_unit": "mV",
         "system_status": "STARTING",
         "updated_at": "",
     }
