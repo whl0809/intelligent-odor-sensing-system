@@ -282,8 +282,10 @@ def render_dashboard(state: DisplayState) -> Image.Image:
     )
 
     rule_mode = state.system_status.upper().startswith("DEMO_RULE")
+    tgs_demo_mode = rule_mode or state.system_status.upper() == "COLLECTING"
     confidence_percent = int(round(state.confidence * 100))
-    draw.text((28, 163), "RULE SCORE" if rule_mode else "Confidence", font=FONT_SMALL_BOLD, fill=MUTED)
+    score_label = "RULE SCORE" if rule_mode else ("COLLECTION" if tgs_demo_mode else "Confidence")
+    draw.text((28, 163), score_label, font=FONT_SMALL_BOLD, fill=MUTED)
     conf_text = f"{confidence_percent}%"
     conf_w, _ = text_size(draw, conf_text, FONT_MEDIUM)
     draw.text((WIDTH - 28 - conf_w, 151), conf_text, font=FONT_MEDIUM, fill=TEXT)
@@ -302,7 +304,7 @@ def render_dashboard(state: DisplayState) -> Image.Image:
     y_positions = (218, 292, 366)
     card_h = 64
 
-    if rule_mode:
+    if tgs_demo_mode:
         draw_metric(draw, (left_x, y_positions[0], left_x + card_w, y_positions[0] + card_h),
                     "TEMPERATURE", fmt(state.temperature_c), "°C", WARN)
         draw_metric(draw, (right_x, y_positions[0], right_x + card_w, y_positions[0] + card_h),

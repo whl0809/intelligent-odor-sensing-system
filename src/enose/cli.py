@@ -474,7 +474,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                             )
                         state = {
                             "food_type": "Collecting",
-                            "freshness_level": f"{min(int(elapsed_s), 60)}/60 s",
+                            "freshness_level": f"{progress}%",
                             "combined_class": "Waiting for stable sample",
                             "confidence": 0.0,
                             "temperature_c": row.get("svm41_temperature_c") or None,
