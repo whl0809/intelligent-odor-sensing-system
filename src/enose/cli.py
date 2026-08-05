@@ -17,6 +17,7 @@ from .config import AppConfig, DeviceConfig, load_config
 from .csv_logger import (
     CSV_COLUMNS,
     NO_SGP41_BME690_SHT45_CSV_COLUMNS,
+    TGS_ONLY_CSV_COLUMNS,
     CSVLogger,
     frame_to_row,
 )
@@ -206,6 +207,18 @@ def _required_sample_failed(config: AppConfig, row: dict[str, object]) -> bool:
 def _without_sgp41_bme690_sht45(config: AppConfig) -> AppConfig:
     return replace(
         config,
+        sgp41=replace(config.sgp41, enabled=False, required=False),
+        bme690=replace(config.bme690, enabled=False, required=False),
+        sht45=replace(config.sht45, enabled=False, required=False),
+    )
+
+
+def _tgs_only(config: AppConfig) -> AppConfig:
+    """Disable every non-TGS device for the hard-coded food demonstration."""
+    return replace(
+        config,
+        nh3=replace(config.nh3, enabled=False, required=False),
+        h2s=replace(config.h2s, enabled=False, required=False),
         sgp41=replace(config.sgp41, enabled=False, required=False),
         bme690=replace(config.bme690, enabled=False, required=False),
         sht45=replace(config.sht45, enabled=False, required=False),
@@ -430,7 +443,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print("acquisition stopped", file=sys.stderr)
                 return 130
             return 0
-        if args.command in REDUCED_ACQUISITION_COMMANDS:
+        if args.command == "acquire-classify":
+            config = _tgs_only(config)
+        elif args.command in REDUCED_ACQUISITION_COMMANDS:
             config = _without_sgp41_bme690_sht45(config)
         live_classifier = None
         display_state_path = None
@@ -466,11 +481,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 return _probe(config, bus, sensors)
             if args.command == "diagnose":
                 return _diagnose(config, sensors)
-            columns = (
-                NO_SGP41_BME690_SHT45_CSV_COLUMNS
-                if args.command in REDUCED_ACQUISITION_COMMANDS
-                else CSV_COLUMNS
-            )
+            if args.command == "acquire-classify":
+                columns = TGS_ONLY_CSV_COLUMNS
+            elif args.command in REDUCED_ACQUISITION_COMMANDS:
+                columns = NO_SGP41_BME690_SHT45_CSV_COLUMNS
+            else:
+                columns = CSV_COLUMNS
             on_frame = (
                 (
                     lambda frame: _update_live_classification(

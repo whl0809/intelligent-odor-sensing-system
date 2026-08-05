@@ -8,11 +8,12 @@ import pytest
 
 import enose.acquisition as acquisition_module
 from enose.acquisition import Acquisition, Sensors
-from enose.cli import _format_frame, _parser, _without_sgp41_bme690_sht45
+from enose.cli import _format_frame, _parser, _tgs_only, _without_sgp41_bme690_sht45
 from enose.config import load_config
 from enose.csv_logger import (
     CSV_COLUMNS,
     NO_SGP41_BME690_SHT45_CSV_COLUMNS,
+    TGS_ONLY_CSV_COLUMNS,
     CSVLogger,
     frame_to_row,
 )
@@ -302,6 +303,16 @@ def test_reduced_mode_disables_sgp41_bme690_and_sht45() -> None:
     assert config.sgp41.enabled is True
     assert config.bme690.enabled is True
     assert config.sht45.enabled is True
+
+
+def test_hard_code_mode_disables_every_non_tgs_sensor() -> None:
+    result = _tgs_only(_test_config())
+    for device in (result.nh3, result.h2s, result.sgp41, result.bme690, result.sht45):
+        assert device.enabled is False
+        assert device.required is False
+    assert result.ads7828.enabled is True
+    assert not any(column.startswith(("nh3_", "h2s_", "sgp41_", "bme690_", "sht45_"))
+                   for column in TGS_ONLY_CSV_COLUMNS)
 
 
 def test_reduced_mode_command_name_replaces_old_name() -> None:
