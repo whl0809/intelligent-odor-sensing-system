@@ -17,7 +17,7 @@ from .config import AppConfig, DeviceConfig, load_config
 from .csv_logger import (
     CSV_COLUMNS,
     NO_SGP41_BME690_SHT45_CSV_COLUMNS,
-    TGS_ONLY_CSV_COLUMNS,
+    TGS_SHT45_CSV_COLUMNS,
     CSVLogger,
     frame_to_row,
 )
@@ -214,14 +214,13 @@ def _without_sgp41_bme690_sht45(config: AppConfig) -> AppConfig:
 
 
 def _tgs_only(config: AppConfig) -> AppConfig:
-    """Disable every non-TGS device for the hard-coded food demonstration."""
+    """Keep TGS plus SHT45 temperature/humidity; disable other devices."""
     return replace(
         config,
         nh3=replace(config.nh3, enabled=False, required=False),
         h2s=replace(config.h2s, enabled=False, required=False),
         sgp41=replace(config.sgp41, enabled=False, required=False),
         bme690=replace(config.bme690, enabled=False, required=False),
-        sht45=replace(config.sht45, enabled=False, required=False),
     )
 
 
@@ -254,6 +253,7 @@ def _print_classification(frame: Frame, result: dict[str, Any]) -> None:
                     f"food_type={predictions['food_type']['overall_prediction']}",
                     f"freshness={predictions['freshness']['overall_prediction']}",
                     f"combined_class={predictions['combined_class']['overall_prediction']}",
+                    f"rule_confidence={result.get('rule_confidence', 0.0):.4f}",
                     f"tgs2603_avg={averages.get('tgs2603_raw', float('nan')):.1f}",
                     f"tgs2620_avg={averages.get('tgs2620_raw', float('nan')):.1f}",
                     f"tgs2602_avg={averages.get('tgs2602_raw', float('nan')):.1f}",
@@ -298,9 +298,12 @@ def _build_display_state(
         "food_confidence": float(food["confidence"]),
         "freshness_confidence": float(freshness["confidence"]),
         "combined_confidence": float(combined["confidence"]),
+        "confidence": float(result.get("rule_confidence", combined["confidence"])),
         "input_rows": int(result["raw_rows"]),
         "valid_rows": int(result["valid_rows"]),
         "model_windows": int(result["window_count"]),
+        "temperature_c": None if frame.sht45 is None else frame.sht45.temperature_c,
+        "humidity_rh": None if frame.sht45 is None else frame.sht45.relative_humidity_pct,
         "system_status": str(result.get("rule_status", "OK" if consistent and complete else "WARNING")),
         "rule_reason": str(result.get("rule_reason", "")),
         "rule_confirmed": bool(result.get("confirmed", False)),
@@ -487,7 +490,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             if args.command == "diagnose":
                 return _diagnose(config, sensors)
             if args.command == "acquire-classify":
-                columns = TGS_ONLY_CSV_COLUMNS
+                columns = TGS_SHT45_CSV_COLUMNS
             elif args.command in REDUCED_ACQUISITION_COMMANDS:
                 columns = NO_SGP41_BME690_SHT45_CSV_COLUMNS
             else:

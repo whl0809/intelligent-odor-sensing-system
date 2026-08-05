@@ -25,26 +25,27 @@ class RulePrediction:
     freshness: str
     status: str
     reason: str
+    rule_score: float
 
 
 def classify_averages(tgs2603: float, tgs2620: float, tgs2602: float) -> RulePrediction:
     """Classify last-window raw averages using the eight-recording demo rules."""
     if tgs2603 < 2150:
-        return RulePrediction("fresh_meat", "meat", "fresh", "DEMO_RULE", "TGS2603 < 2150")
+        return RulePrediction("fresh_meat", "meat", "fresh", "DEMO_RULE", "TGS2603 < 2150", min(1.0, (2150 - tgs2603) / 250))
     if tgs2603 < 2250:
         return RulePrediction("uncertain_fresh", "unknown", "uncertain", "DEMO_RULE_UNCERTAIN",
-                              "TGS2603 is in the 2150--2250 fresh-class boundary")
+                              "TGS2603 is in the 2150--2250 fresh-class boundary", 0.0)
     if tgs2603 < 3000:
         return RulePrediction("fresh_banana", "banana", "fresh", "DEMO_RULE",
-                              "2250 <= TGS2603 < 3000")
+                              "2250 <= TGS2603 < 3000", min(1.0, min(tgs2603 - 2250, 3000 - tgs2603) / 250))
     if tgs2620 >= 3800 and tgs2602 >= 3900:
         return RulePrediction("spoiled_meat", "meat", "spoiled", "DEMO_RULE",
-                              "TGS2620 >= 3800 and TGS2602 >= 3900")
+                              "TGS2620 >= 3800 and TGS2602 >= 3900", min(1.0, min(tgs2620 - 3800, tgs2602 - 3900) / 250))
     if tgs2620 < 3800:
         return RulePrediction("fermented_banana", "banana", "fermented", "DEMO_RULE",
-                              "TGS2603 >= 3000 and TGS2620 < 3800")
+                              "TGS2603 >= 3000 and TGS2620 < 3800", min(1.0, min(tgs2603 - 3000, 3800 - tgs2620) / 250))
     return RulePrediction("uncertain", "unknown", "uncertain", "DEMO_RULE_UNCERTAIN",
-                          "Readings are outside the four demonstrated regions")
+                          "Readings are outside the four demonstrated regions", 0.0)
 
 
 def _final(prediction: RulePrediction) -> bool:
@@ -90,9 +91,14 @@ class SlidingWindowClassifier:
         averages = tuple(sum(row[index] for row in self._window) / len(self._window) for index in range(3))
         prediction = self._classifier.predict(*averages)
         self._history.append(prediction)
-        confirmed = (_final(prediction) and len(self._history) == self._confirmations
-                     and all(item.combined_class == prediction.combined_class for item in self._history))
+        matching = 0
+        for item in reversed(self._history):
+            if item.combined_class != prediction.combined_class:
+                break
+            matching += 1
+        confirmed = _final(prediction) and matching >= self._confirmations
         status = prediction.status if confirmed or not _final(prediction) else "DEMO_RULE_STABILIZING"
+        rule_confidence = prediction.rule_score * min(1.0, matching / self._confirmations)
         return {
             "raw_rows": self._window_rows,
             "valid_rows": self._window_rows,
@@ -100,10 +106,11 @@ class SlidingWindowClassifier:
             "confirmed": confirmed,
             "rule_status": status,
             "rule_reason": prediction.reason,
+            "rule_confidence": rule_confidence,
             "sensor_averages": {"tgs2603_raw": averages[0], "tgs2620_raw": averages[1], "tgs2602_raw": averages[2]},
             "predictions": {
-                "food_type": {"overall_prediction": prediction.food_type, "confidence": 0.0},
-                "freshness": {"overall_prediction": prediction.freshness, "confidence": 0.0},
-                "combined_class": {"overall_prediction": prediction.combined_class, "confidence": 0.0},
+                "food_type": {"overall_prediction": prediction.food_type, "confidence": rule_confidence},
+                "freshness": {"overall_prediction": prediction.freshness, "confidence": rule_confidence},
+                "combined_class": {"overall_prediction": prediction.combined_class, "confidence": rule_confidence},
             },
         }

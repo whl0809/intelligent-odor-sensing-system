@@ -283,17 +283,14 @@ def render_dashboard(state: DisplayState) -> Image.Image:
 
     rule_mode = state.system_status.upper().startswith("DEMO_RULE")
     confidence_percent = int(round(state.confidence * 100))
-    draw.text((28, 163), "RULE STATUS" if rule_mode else "Confidence", font=FONT_SMALL_BOLD, fill=MUTED)
-    if rule_mode:
-        conf_text = "CONFIRMED" if state.rule_confirmed else state.system_status.replace("DEMO_RULE_", "").replace("_", " ")
-    else:
-        conf_text = f"{confidence_percent}%"
+    draw.text((28, 163), "RULE SCORE" if rule_mode else "Confidence", font=FONT_SMALL_BOLD, fill=MUTED)
+    conf_text = f"{confidence_percent}%"
     conf_w, _ = text_size(draw, conf_text, FONT_MEDIUM)
     draw.text((WIDTH - 28 - conf_w, 151), conf_text, font=FONT_MEDIUM, fill=TEXT)
 
     bar = (28, 185, WIDTH - 28, 193)
     draw.rounded_rectangle(bar, radius=4, fill=(34, 47, 63))
-    fill_right = bar[2] if rule_mode and state.rule_confirmed else bar[0] + int((bar[2] - bar[0]) * state.confidence)
+    fill_right = bar[0] + int((bar[2] - bar[0]) * state.confidence)
     if fill_right > bar[0]:
         draw.rounded_rectangle((bar[0], bar[1], fill_right, bar[3]), radius=4, fill=level_color)
 
@@ -307,10 +304,14 @@ def render_dashboard(state: DisplayState) -> Image.Image:
 
     if rule_mode:
         draw_metric(draw, (left_x, y_positions[0], left_x + card_w, y_positions[0] + card_h),
-                    "TGS2603 AVG", fmt(state.tgs2603_raw, 0), "RAW", ACCENT)
+                    "TEMPERATURE", fmt(state.temperature_c), "°C", WARN)
         draw_metric(draw, (right_x, y_positions[0], right_x + card_w, y_positions[0] + card_h),
-                    "TGS2620 AVG", fmt(state.tgs2620_raw, 0), "RAW", ACCENT)
+                    "HUMIDITY", fmt(state.humidity_rh), "%RH", BLUE)
         draw_metric(draw, (left_x, y_positions[1], left_x + card_w, y_positions[1] + card_h),
+                    "TGS2603 AVG", fmt(state.tgs2603_raw, 0), "RAW", ACCENT)
+        draw_metric(draw, (right_x, y_positions[1], right_x + card_w, y_positions[1] + card_h),
+                    "TGS2620 AVG", fmt(state.tgs2620_raw, 0), "RAW", ACCENT)
+        draw_metric(draw, (left_x, y_positions[2], left_x + card_w, y_positions[2] + card_h),
                     "TGS2602 AVG", fmt(state.tgs2602_raw, 0), "RAW", ACCENT)
     else:
         draw_metric(draw, (left_x, y_positions[0], left_x + card_w, y_positions[0] + card_h),

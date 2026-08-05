@@ -45,8 +45,8 @@ python -m enose acquire-classify --config config/rpi5.toml --frames 120 \
   --display-state runtime/display_state.json
 ```
 
-This command enables only the ADS7828 TGS array: NH3 and H2S are explicitly
-disabled and are neither initialized nor logged. It waits 60 seconds, averages the latest 10 raw readings from TGS2603,
+This command enables the ADS7828 TGS array and SHT45 temperature/humidity:
+NH3 and H2S are explicitly disabled and are neither initialized nor logged. It waits 60 seconds, averages the latest 10 raw readings from TGS2603,
 TGS2620, and TGS2602, and requires five matching rule outputs before showing a
 final label. TGS2603 separates fresh meat, fresh banana, and non-fresh states;
 TGS2620 plus TGS2602 confirm spoiled meat. The 2150--2250 TGS2603 boundary and

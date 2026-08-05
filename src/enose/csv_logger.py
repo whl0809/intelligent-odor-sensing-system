@@ -60,10 +60,10 @@ NO_SGP41_BME690_SHT45_CSV_COLUMNS = tuple(
     for column in CSV_COLUMNS
     if not column.startswith(("sgp41_", "bme690_", "sht45_"))
 )
-TGS_ONLY_CSV_COLUMNS = tuple(
+TGS_SHT45_CSV_COLUMNS = tuple(
     column
     for column in CSV_COLUMNS
-    if not column.startswith(("sht45_", "nh3_", "h2s_", "sgp41_", "bme690_"))
+    if not column.startswith(("nh3_", "h2s_", "sgp41_", "bme690_"))
 )
 
 
