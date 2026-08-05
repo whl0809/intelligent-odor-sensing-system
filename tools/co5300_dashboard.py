@@ -281,11 +281,8 @@ def render_dashboard(state: DisplayState) -> Image.Image:
         fill=(8, 13, 22),
     )
 
-    rule_mode = state.system_status.upper().startswith("DEMO_RULE")
-    tgs_demo_mode = rule_mode or state.system_status.upper() == "COLLECTING"
     confidence_percent = int(round(state.confidence * 100))
-    score_label = "RULE SCORE" if rule_mode else ("COLLECTION" if tgs_demo_mode else "Confidence")
-    draw.text((28, 163), score_label, font=FONT_SMALL_BOLD, fill=MUTED)
+    draw.text((28, 163), "Confidence", font=FONT_SMALL_BOLD, fill=MUTED)
     conf_text = f"{confidence_percent}%"
     conf_w, _ = text_size(draw, conf_text, FONT_MEDIUM)
     draw.text((WIDTH - 28 - conf_w, 151), conf_text, font=FONT_MEDIUM, fill=TEXT)
@@ -304,30 +301,18 @@ def render_dashboard(state: DisplayState) -> Image.Image:
     y_positions = (218, 292, 366)
     card_h = 64
 
-    if tgs_demo_mode:
-        draw_metric(draw, (left_x, y_positions[0], left_x + card_w, y_positions[0] + card_h),
-                    "TEMPERATURE", fmt(state.temperature_c), "°C", WARN)
-        draw_metric(draw, (right_x, y_positions[0], right_x + card_w, y_positions[0] + card_h),
-                    "HUMIDITY", fmt(state.humidity_rh), "%RH", BLUE)
-        draw_metric(draw, (left_x, y_positions[1], left_x + card_w, y_positions[1] + card_h),
-                    "TGS2603 AVG", fmt(state.tgs2603_raw, 0), "RAW", ACCENT)
-        draw_metric(draw, (right_x, y_positions[1], right_x + card_w, y_positions[1] + card_h),
-                    "TGS2620 AVG", fmt(state.tgs2620_raw, 0), "RAW", ACCENT)
-        draw_metric(draw, (left_x, y_positions[2], left_x + card_w, y_positions[2] + card_h),
-                    "TGS2602 AVG", fmt(state.tgs2602_raw, 0), "RAW", ACCENT)
-    else:
-        draw_metric(draw, (left_x, y_positions[0], left_x + card_w, y_positions[0] + card_h),
-                    "TEMPERATURE", fmt(state.temperature_c), "°C", WARN)
-        draw_metric(draw, (right_x, y_positions[0], right_x + card_w, y_positions[0] + card_h),
-                    "HUMIDITY", fmt(state.humidity_rh), "%RH", BLUE)
-        draw_metric(draw, (left_x, y_positions[1], left_x + card_w, y_positions[1] + card_h),
-                    "VOC", fmt(state.voc_raw, 0), "SRAW", ACCENT)
-        draw_metric(draw, (right_x, y_positions[1], right_x + card_w, y_positions[1] + card_h),
-                    "NOx", fmt(state.nox_raw, 0), "SRAW", ACCENT)
-        draw_metric(draw, (left_x, y_positions[2], left_x + card_w, y_positions[2] + card_h),
-                    "NH₃", fmt(state.nh3_value, 2), state.nh3_unit, WARN)
-        draw_metric(draw, (right_x, y_positions[2], right_x + card_w, y_positions[2] + card_h),
-                    "H₂S", fmt(state.h2s_value, 2), state.h2s_unit, BAD)
+    draw_metric(draw, (left_x, y_positions[0], left_x + card_w, y_positions[0] + card_h),
+                "TEMPERATURE", fmt(state.temperature_c), "°C", WARN)
+    draw_metric(draw, (right_x, y_positions[0], right_x + card_w, y_positions[0] + card_h),
+                "HUMIDITY", fmt(state.humidity_rh), "%RH", BLUE)
+    draw_metric(draw, (left_x, y_positions[1], left_x + card_w, y_positions[1] + card_h),
+                "VOC", fmt(state.voc_raw, 0), "SRAW", ACCENT)
+    draw_metric(draw, (right_x, y_positions[1], right_x + card_w, y_positions[1] + card_h),
+                "NOx", fmt(state.nox_raw, 0), "SRAW", ACCENT)
+    draw_metric(draw, (left_x, y_positions[2], left_x + card_w, y_positions[2] + card_h),
+                "NH₃", fmt(state.nh3_value, 2), state.nh3_unit, WARN)
+    draw_metric(draw, (right_x, y_positions[2], right_x + card_w, y_positions[2] + card_h),
+                "H₂S", fmt(state.h2s_value, 2), state.h2s_unit, BAD)
 
     # Status strip
     status_box = (14, 443, WIDTH - 14, 488)

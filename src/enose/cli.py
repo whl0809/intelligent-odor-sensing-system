@@ -474,9 +474,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                             )
                         state = {
                             "food_type": "Collecting",
-                            "freshness_level": f"{progress}%",
+                            "freshness_level": "collecting",
                             "combined_class": "Waiting for stable sample",
-                            "confidence": 0.0,
+                            "confidence": progress / 100.0,
                             "temperature_c": row.get("svm41_temperature_c") or None,
                             "humidity_rh": row.get("svm41_relative_humidity_pct") or None,
                             "tgs2603_raw": tgs2603,
