@@ -449,23 +449,42 @@ def main(argv: Sequence[str] | None = None) -> int:
                 _write_json_atomic(args.display_state, _starting_display_state(args.classification_window_rows))
 
             def classify_svm41_row(row: dict[str, object]) -> None:
+                elapsed_s = float(row["elapsed_s"])
+                sequence = int(row["sequence"])
+                tgs2603 = float(row["tgs2603_raw"])
+                tgs2620 = float(row["tgs2620_raw"])
+                tgs2602 = float(row["tgs2602_raw"])
                 try:
                     result = classifier.add_values(
-                        float(row["elapsed_s"]), int(row["sequence"]),
-                        float(row["tgs2603_raw"]), float(row["tgs2620_raw"]), float(row["tgs2602_raw"]),
+                        elapsed_s, sequence, tgs2603, tgs2620, tgs2602,
                     )
                 except (KeyError, TypeError, ValueError):
                     return
-                if result is None:
-                    return
-                frame = Frame(str(row["timestamp_utc"]), float(row["elapsed_s"]), int(row["sequence"]), 0.0, 0.0,
+                frame = Frame(str(row["timestamp_utc"]), elapsed_s, sequence, 0.0, 0.0,
                               None, None, None, None, None, None)
-                _print_classification(frame, result)
                 if args.display_state is not None:
-                    state = _build_display_state(frame, result)
+                    if result is None:
+                        state = {
+                            "food_type": "Collecting",
+                            "freshness_level": f"{min(int(elapsed_s), 60)}/60 s",
+                            "combined_class": "Waiting for stable sample",
+                            "confidence": 0.0,
+                            "temperature_c": row.get("svm41_temperature_c") or None,
+                            "humidity_rh": row.get("svm41_relative_humidity_pct") or None,
+                            "tgs2603_raw": tgs2603,
+                            "tgs2620_raw": tgs2620,
+                            "tgs2602_raw": tgs2602,
+                            "system_status": "COLLECTING",
+                            "updated_at": frame.timestamp_utc,
+                        }
+                    else:
+                        state = _build_display_state(frame, result)
+                        _print_classification(frame, result)
                     state["temperature_c"] = row.get("svm41_temperature_c") or None
                     state["humidity_rh"] = row.get("svm41_relative_humidity_pct") or None
                     _write_json_atomic(args.display_state, state)
+                elif result is not None:
+                    _print_classification(frame, result)
 
             try:
                 return run_svm41_acquisition(
