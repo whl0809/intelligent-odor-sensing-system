@@ -464,8 +464,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                               None, None, None, None, None, None)
                 if args.display_state is not None:
                     if result is None:
+                        progress = min(100, int(elapsed_s / args.classification_min_elapsed_s * 100))
                         if sequence == 0 or (sequence + 1) % 10 == 0:
-                            progress = min(100, int(elapsed_s / args.classification_min_elapsed_s * 100))
                             print(
                                 f"COLLECTING elapsed_s={elapsed_s:.0f} "
                                 f"progress={progress}% "
