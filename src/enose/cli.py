@@ -55,14 +55,26 @@ def _parser() -> argparse.ArgumentParser:
             command.add_argument(
                 "--classification-window-rows",
                 type=int,
-                default=60,
-                help="CSV rows per classification input (default: 60, minimum: 20)",
+                default=10,
+                help="Most recent TGS rows to average (default: 10).",
             )
             command.add_argument(
                 "--classification-update-rows",
                 type=int,
-                default=10,
-                help="new rows between classifications (default: 10)",
+                default=1,
+                help="New rows between rule evaluations (default: 1).",
+            )
+            command.add_argument(
+                "--classification-min-elapsed-s",
+                type=float,
+                default=60.0,
+                help="Wait this long before classification (default: 60 s).",
+            )
+            command.add_argument(
+                "--classification-confirmations",
+                type=int,
+                default=5,
+                help="Matching rule outputs needed to confirm a final label (default: 5).",
             )
             command.add_argument(
                 "--display-state",
@@ -267,7 +279,10 @@ def _build_display_state(
             else frame.h2s.differential_voltage_v * 1000.0
         ),
         "h2s_unit": "mV",
-        "system_status": "OK" if consistent and complete else "WARNING",
+        "system_status": str(result.get("rule_status", "OK" if consistent and complete else "WARNING")),
+        "rule_reason": str(result.get("rule_reason", "")),
+        "rule_confirmed": bool(result.get("confirmed", False)),
+        "sensor_averages": result.get("sensor_averages", {}),
         "updated_at": frame.timestamp_utc,
     }
 
@@ -430,6 +445,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     FoodFreshnessClassifier(),
                     window_rows=args.classification_window_rows,
                     update_rows=args.classification_update_rows,
+                    min_elapsed_s=args.classification_min_elapsed_s,
+                    confirmations=args.classification_confirmations,
                 )
                 display_state_path = args.display_state
                 if display_state_path is not None:

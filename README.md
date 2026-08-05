@@ -35,6 +35,25 @@ channels, NH3, and H2S. It disables SGP41, BME690, and SHT45; those devices
 do not appear in that mode's terminal rows or CSV columns, and no SVM41 is
 used.
 
+## Four-state hard-code demonstration
+
+For the current eight labeled food recordings, use the transparent rule-based
+command instead of the generalization model:
+
+```bash
+python -m enose acquire-classify --config config/rpi5.toml --frames 120 \
+  --display-state runtime/display_state.json
+```
+
+It waits 60 seconds, averages the latest 10 raw readings from TGS2603,
+TGS2620, and TGS2602, and requires five matching rule outputs before showing a
+final label. TGS2603 separates fresh meat, fresh banana, and non-fresh states;
+TGS2620 plus TGS2602 confirm spoiled meat. The 2150--2250 TGS2603 boundary and
+any non-demonstrated combination are reported as `uncertain`, rather than
+being forced into a food class. This is a demo rule for the current device and
+eight recordings only; it is not a calibrated gas measurement, food-safety
+result, or cross-day validation.
+
 The BME690 driver uses Bosch Sensortec's official BME690 SensorAPI v1.1.0
 through a small native extension built during installation. It runs the sensor
 in forced mode with the heater settings from `config/rpi5.toml`. BME690 remains
