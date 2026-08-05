@@ -1,0 +1,62 @@
+{
+  "_instructions": [
+    "This file controls display-only ppm conversion; it does not change model inference.",
+    "Do not enter datasheet-only guesses. Record at least two known concentrations on the assembled device.",
+    "For every points entry, raw is the median source-column reading at the known ppm concentration.",
+    "VOC is normally reported as ethanol-equivalent ppm; NOx is normally reported as NO2-equivalent ppm.",
+    "TGS concentrations are proxy-gas equivalents and are valid only for the gas and range used during calibration."
+  ],
+  "unit": "ppm",
+  "svm41": {
+    "voc": {
+      "label": "VOC-EQ",
+      "proxy_gas": "ethanol",
+      "source_column": "svm41_raw_voc_ticks",
+      "points": []
+    },
+    "nox": {
+      "label": "NOx-EQ",
+      "proxy_gas": "NO2",
+      "source_column": "svm41_raw_nox_ticks",
+      "points": []
+    }
+  },
+  "tgs": {
+    "tgs2620": {
+      "label": "TGS2620",
+      "proxy_gas": "ethanol",
+      "source_column": "tgs2620_raw",
+      "points": []
+    },
+    "tgs2610": {
+      "label": "TGS2610",
+      "proxy_gas": "methane",
+      "source_column": "tgs2610_raw",
+      "points": []
+    },
+    "tgs2611": {
+      "label": "TGS2611",
+      "proxy_gas": "methane",
+      "source_column": "tgs2611_raw",
+      "points": []
+    },
+    "tgs2600": {
+      "label": "TGS2600",
+      "proxy_gas": "hydrogen",
+      "source_column": "tgs2600_raw",
+      "points": []
+    },
+    "tgs2602": {
+      "label": "TGS2602",
+      "proxy_gas": "ethanol",
+      "source_column": "tgs2602_raw",
+      "points": []
+    },
+    "tgs2603": {
+      "label": "TGS2603",
+      "proxy_gas": "ethanol",
+      "source_column": "tgs2603_raw",
+      "points": []
+    }
+  }
+}
