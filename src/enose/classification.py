@@ -82,10 +82,14 @@ class SlidingWindowClassifier:
         required = ("tgs2603", "tgs2620", "tgs2602")
         if any(name not in readings for name in required):
             return None
-        self._window.append(tuple(float(readings[name].raw) for name in required))
-        if frame.elapsed_s < self._min_elapsed_s or len(self._window) < self._window_rows:
+        return self.add_values(frame.elapsed_s, frame.sequence, *(float(readings[name].raw) for name in required))
+
+    def add_values(self, elapsed_s: float, sequence: int, tgs2603: float, tgs2620: float,
+                   tgs2602: float) -> dict[str, Any] | None:
+        self._window.append((tgs2603, tgs2620, tgs2602))
+        if elapsed_s < self._min_elapsed_s or len(self._window) < self._window_rows:
             return None
-        if (frame.sequence + 1) % self._update_rows != 0:
+        if (sequence + 1) % self._update_rows != 0:
             return None
 
         averages = tuple(sum(row[index] for row in self._window) / len(self._window) for index in range(3))

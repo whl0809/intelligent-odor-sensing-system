@@ -53,6 +53,7 @@ def _parser() -> argparse.ArgumentParser:
         if name == "acquire" or name in REDUCED_ACQUISITION_COMMANDS:
             command.add_argument("--frames", type=int)
         if name == "acquire-classify":
+            command.add_argument("--uart", default="/dev/ttyUSB0", help="SVM41 USB-UART device.")
             command.add_argument(
                 "--classification-window-rows",
                 type=int,
@@ -434,6 +435,46 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     try:
         config = load_config(args.config)
+        if args.command == "acquire-classify":
+            from .classification import FoodFreshnessClassifier, SlidingWindowClassifier
+
+            classifier = SlidingWindowClassifier(
+                FoodFreshnessClassifier(),
+                window_rows=args.classification_window_rows,
+                update_rows=args.classification_update_rows,
+                min_elapsed_s=args.classification_min_elapsed_s,
+                confirmations=args.classification_confirmations,
+            )
+            if args.display_state is not None:
+                _write_json_atomic(args.display_state, _starting_display_state(args.classification_window_rows))
+
+            def classify_svm41_row(row: dict[str, object]) -> None:
+                try:
+                    result = classifier.add_values(
+                        float(row["elapsed_s"]), int(row["sequence"]),
+                        float(row["tgs2603_raw"]), float(row["tgs2620_raw"]), float(row["tgs2602_raw"]),
+                    )
+                except (KeyError, TypeError, ValueError):
+                    return
+                if result is None:
+                    return
+                frame = Frame(str(row["timestamp_utc"]), float(row["elapsed_s"]), int(row["sequence"]), 0.0, 0.0,
+                              None, None, None, None, None, None)
+                _print_classification(frame, result)
+                if args.display_state is not None:
+                    state = _build_display_state(frame, result)
+                    state["temperature_c"] = row.get("svm41_temperature_c") or None
+                    state["humidity_rh"] = row.get("svm41_relative_humidity_pct") or None
+                    _write_json_atomic(args.display_state, state)
+
+            try:
+                return run_svm41_acquisition(
+                    config, args.uart, max_frames=args.frames, include_ads7828=True,
+                    include_mcp3421=False, on_row=classify_svm41_row,
+                )
+            except KeyboardInterrupt:
+                print("acquisition stopped", file=sys.stderr)
+                return 130
         if args.command in {
             "acquire-svm41",
             REDUCED_SVM41_COMMAND,

@@ -181,6 +181,7 @@ def run_svm41_acquisition(
     monotonic_fn: Callable[[], float] = time.monotonic,
     utcnow_fn: Callable[[], datetime] = lambda: datetime.now(UTC),
     print_fn: Callable[[str], None] = print,
+    on_row: Callable[[dict[str, object]], None] | None = None,
 ) -> int:
     if max_frames is not None and max_frames < 1:
         raise ValueError("--frames must be at least 1")
@@ -370,6 +371,8 @@ def run_svm41_acquisition(
                 row["svm41_nox_index"] = svm41_sample.nox_index
 
             csv_logger.write(row)
+            if on_row is not None:
+                on_row(row)
             if include_ads7828:
                 print_fn(
                     " ".join(
