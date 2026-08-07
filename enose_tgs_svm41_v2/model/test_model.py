@@ -2,7 +2,7 @@
 """Inference wrapper for the fused hierarchical e-nose model.
 
 This version is compatible with:
-- enose_multitask_improved.py
+- enose_multitask.py
 - enose_auto_classify_display.py
 - the format-version 2 bundle containing:
     models.food_model
@@ -25,7 +25,7 @@ from typing import Any
 
 import joblib
 
-from enose_multitask_improved import (
+from enose_multitask import (
     _align_features,
     _score_model_set,
     extract_windows,
@@ -45,7 +45,7 @@ def validate_bundle(bundle: dict[str, Any]) -> None:
         raise ValueError(
             "Model bundle is missing fused-model keys: "
             + ", ".join(missing)
-            + ". Retrain using enose_multitask_improved.py."
+            + ". Retrain using enose_multitask.py."
         )
 
     model_required = {
