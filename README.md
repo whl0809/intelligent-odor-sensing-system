@@ -1,4 +1,4 @@
-# ECE450 Odor-Sensing Raspberry Pi 5 Application — outdated C++ version
+# ECE450 Odor-Sensing Raspberry Pi 5 Application — Outdated C++ Version
 
 Linux user-space scaffold for the Raspberry Pi 5 version of the odor-sensing
 project. The software platform is Raspberry Pi OS, CMake, and C++17.
