@@ -1,0 +1,1245 @@
+#!/usr/bin/env python3
+"""Test the trained model from a CSV or an external acquisition checkout.
+
+Run from the repository root:
+
+    python pipeline/run_model_pipeline.py --input-csv data/test/test1.csv
+
+Live acquisition is delegated to a separate checkout of the acquisition
+branch. Pass that checkout with ``--acquisition-root``.
+
+The physical sample change still requires an operator prompt. Pass ``--yes``
+only when chamber/pump control already performs that transition automatically.
+During sample acquisition, inference begins after warm-up plus the minimum
+window length, then repeats whenever the recording prefix advances. Each live
+prediction median-aggregates all currently available windows, matching the
+recording-level training distribution. Sensor data is collected by the
+acquisition branch's unified ``acquire`` command with TGS and SVM41 selected.
+The dashboard runs continuously in the background so every sliding-window
+result is shown immediately instead of only showing the final prediction.
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import glob
+import json
+import math
+import os
+import re
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+import joblib
+
+try:
+    import tomllib
+except ImportError as exc:
+    raise SystemExit("Python 3.11 or newer is required.") from exc
+
+
+DEFAULT_BASELINE_FRAMES = 120
+DEFAULT_SAMPLE_FRAMES = 120
+SUMMARY_ROWS = 10
+DEFAULT_UART = "auto"
+
+# Display-only concentration handling. These values do not affect the ML model.
+TGS_NAMES = (
+    "tgs2620",
+    "tgs2610",
+    "tgs2611",
+    "tgs2600",
+    "tgs2602",
+    "tgs2603",
+)
+TGS_SATURATION_LOW = 3
+TGS_SATURATION_HIGH = 4094
+MAX_DISPLAY_SATURATION_FRACTION = 0.20
+
+
+def default_project_root() -> Path:
+    script = Path(__file__).resolve()
+    return script.parent.parent
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--project-root", type=Path, default=default_project_root())
+    parser.add_argument(
+        "--acquisition-root",
+        type=Path,
+        help=(
+            "checkout of the acquisition branch; required only when collecting "
+            "new data instead of using --input-csv"
+        ),
+    )
+    parser.add_argument("--frames", type=int, default=DEFAULT_SAMPLE_FRAMES)
+    parser.add_argument("--baseline-frames", type=int, default=DEFAULT_BASELINE_FRAMES)
+    parser.add_argument(
+        "--uart",
+        default=DEFAULT_UART,
+        help=(
+            "SVM41 UART device; default 'auto' searches /dev/serial/by-id, "
+            "/dev/ttyUSB*, and /dev/ttyACM*"
+        ),
+    )
+    parser.add_argument(
+        "--prediction-step",
+        type=int,
+        help="New valid frames between live predictions; default: model training step.",
+    )
+    parser.add_argument("--input-csv", type=Path, help="Use an existing sample CSV")
+    parser.add_argument("--baseline-csv", type=Path, help="Use an existing baseline CSV")
+    parser.add_argument("--yes", action="store_true", help="Skip operator prompts")
+    baseline_group = parser.add_mutually_exclusive_group()
+    baseline_group.add_argument(
+        "--collect-baseline",
+        action="store_true",
+        help="Collect an optional diagnostic baseline before the sample.",
+    )
+    baseline_group.add_argument(
+        "--no-baseline",
+        action="store_true",
+        help="Skip baseline collection (recommended for the improved absolute model).",
+    )
+    parser.add_argument(
+        "--display-calibration",
+        type=Path,
+        help=(
+            "JSON calibration file used only for ppm display conversion; "
+            "default: pipeline/config/gas_display_calibration.json"
+        ),
+    )
+    parser.add_argument("--no-display", action="store_true")
+    parser.add_argument("--no-hold", action="store_true")
+    parser.add_argument("--skip-te-check", action="store_true")
+    parser.add_argument("--confidence-threshold", type=float, default=0.65)
+    parser.add_argument("--expected-food", choices=["blank", "banana", "meat"])
+    parser.add_argument(
+        "--expected-freshness",
+        choices=["not_applicable", "fresh", "fermented", "spoiled"],
+    )
+    return parser
+
+
+def resolve_paths(root: Path) -> dict[str, Path]:
+    root = root.expanduser().resolve()
+    output = root / "results"
+    model_dir = root / "model" / "artifacts"
+    return {
+        "root": root,
+        "display_init": root / "pipeline" / "config" / "co5300_init.json",
+        "dashboard": root / "pipeline" / "co5300_dashboard.py",
+        "test_script": root / "model" / "test_model.py",
+        "model": model_dir / "enose_multitask_model.joblib",
+        "result": output / "session_prediction.json",
+        "display_state": root / "runtime" / "display_state.json",
+        "display_calibration": (
+            root / "pipeline" / "config" / "gas_display_calibration.json"
+        ),
+    }
+
+
+def require_file(label: str, path: Path) -> None:
+    if not path.is_file():
+        raise FileNotFoundError(f"{label} not found: {path}")
+
+
+def project_environment(acquisition_root: Path | None = None) -> dict[str, str]:
+    environment = os.environ.copy()
+    if acquisition_root is not None:
+        source = acquisition_root / "src"
+        if not (source / "enose" / "__init__.py").is_file():
+            raise FileNotFoundError(
+                f"acquisition package not found below {acquisition_root}"
+            )
+        old = environment.get("PYTHONPATH")
+        environment["PYTHONPATH"] = (
+            str(source) if not old else str(source) + os.pathsep + old
+        )
+    environment["PYTHONUNBUFFERED"] = "1"
+    return environment
+
+
+def resolve_uart_device(requested: str) -> str:
+    """Resolve the SVM41 serial port while keeping the normal command short."""
+    if requested != "auto":
+        path = Path(requested).expanduser()
+        if not path.exists():
+            raise FileNotFoundError(f"SVM41 UART device not found: {path}")
+        return str(path)
+
+    candidates: list[Path] = []
+    for pattern in (
+        "/dev/serial/by-id/*",
+        "/dev/ttyUSB*",
+        "/dev/ttyACM*",
+    ):
+        candidates.extend(Path(path) for path in sorted(glob.glob(pattern)))
+
+    unique: list[Path] = []
+    resolved_paths: set[Path] = set()
+    for candidate in candidates:
+        resolved = candidate.resolve()
+        if resolved not in resolved_paths:
+            unique.append(candidate)
+            resolved_paths.add(resolved)
+
+    if not unique:
+        raise FileNotFoundError(
+            "No SVM41 UART device found. Connect the Sensirion USB-UART "
+            "adapter or run with --uart /dev/ttyUSB0."
+        )
+
+    for candidate in unique:
+        if "sensirion" in str(candidate).lower():
+            return str(candidate)
+    return str(unique[0])
+
+
+def stream(command: list[str], root: Path, environment: dict[str, str]) -> list[str]:
+    print("\n$ " + " ".join(command), flush=True)
+    process = subprocess.Popen(
+        command,
+        cwd=root,
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+    lines: list[str] = []
+    assert process.stdout is not None
+    for line in process.stdout:
+        print(line, end="")
+        lines.append(line.rstrip("\n"))
+    code = process.wait()
+    if code:
+        raise RuntimeError(f"Command exited with status {code}: {' '.join(command)}")
+    return lines
+
+
+def acquisition_output_dir(config_path: Path, root: Path) -> Path:
+    with config_path.open("rb") as handle:
+        config = tomllib.load(handle)
+    try:
+        configured = Path(str(config["acquisition"]["output_dir"]))
+    except (KeyError, TypeError) as exc:
+        raise ValueError(f"Missing acquisition.output_dir in {config_path}") from exc
+    return configured if configured.is_absolute() else (root / configured).resolve()
+
+
+def find_acquired_csv(
+    lines: list[str], output_dir: Path, before: set[Path], root: Path
+) -> Path:
+    pattern = re.compile(r"^writing\s+(.+\.csv)\s*$", re.IGNORECASE)
+    for line in lines:
+        match = pattern.match(line.strip())
+        if match:
+            candidate = Path(match.group(1))
+            candidate = candidate if candidate.is_absolute() else root / candidate
+            if candidate.is_file():
+                return candidate.resolve()
+    new_files = set(output_dir.glob("*.csv")) - before
+    if not new_files:
+        raise FileNotFoundError(f"Acquisition created no CSV in {output_dir}")
+    return max(new_files, key=lambda path: path.stat().st_mtime).resolve()
+
+
+def find_live_csv(
+    lines: list[str], output_dir: Path, before: set[Path], root: Path
+) -> Path | None:
+    """Return the currently written acquisition CSV, if it is visible yet."""
+    pattern = re.compile(r"^writing\s+(.+\.csv)\s*$", re.IGNORECASE)
+    for line in reversed(lines.copy()):
+        match = pattern.match(line.strip())
+        if match:
+            candidate = Path(match.group(1))
+            candidate = candidate if candidate.is_absolute() else root / candidate
+            if candidate.is_file():
+                return candidate.resolve()
+    new_files = set(output_dir.glob("*.csv")) - before
+    if new_files:
+        return max(new_files, key=lambda path: path.stat().st_mtime).resolve()
+    return None
+
+
+def acquisition_command(
+    paths: dict[str, Path], frames: int, uart_device: str
+) -> list[str]:
+    return [
+        sys.executable,
+        "-m",
+        "enose",
+        "acquire",
+        "--config",
+        str(paths["config"]),
+        "--sensors",
+        "tgs,svm41",
+        "--uart",
+        uart_device,
+        "--frames",
+        str(frames),
+    ]
+
+
+def acquire(paths: dict[str, Path], frames: int, uart_device: str) -> Path:
+    if frames < 80:
+        raise ValueError("At least 80 frames are required for warm-up and one valid window")
+    acquisition_root = paths["acquisition_root"]
+    output_dir = acquisition_output_dir(paths["config"], acquisition_root)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    before = set(output_dir.glob("*.csv"))
+    command = acquisition_command(paths, frames, uart_device)
+    lines = stream(
+        command,
+        acquisition_root,
+        project_environment(acquisition_root),
+    )
+    return find_acquired_csv(lines, output_dir, before, acquisition_root)
+
+
+def atomic_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        "w", encoding="utf-8", dir=path.parent, prefix=path.name, delete=False
+    ) as handle:
+        json.dump(payload, handle, indent=2, ensure_ascii=False)
+        handle.write("\n")
+        temporary = Path(handle.name)
+    temporary.replace(path)
+
+
+def status_display_state(
+    food_type: str,
+    freshness_level: str,
+    system_status: str,
+) -> dict[str, Any]:
+    """Create a valid display state before the first prediction is available."""
+    return {
+        "food_type": food_type,
+        "freshness_level": freshness_level,
+        "confidence": 0.0,
+        "temperature_c": None,
+        "humidity_rh": None,
+        "voc_ppm": None,
+        "nox_ppm": None,
+        "voc_label": "VOC-EQ",
+        "nox_label": "NOx-EQ",
+        "tgs1_label": "TGS 1",
+        "tgs1_ppm": None,
+        "tgs2_label": "TGS 2",
+        "tgs2_ppm": None,
+        "concentration_unit": "ppm",
+        "system_status": system_status,
+        "updated_at": datetime.now().isoformat(timespec="seconds"),
+    }
+
+def prompt_yes_no(question: str, *, default: bool = True) -> bool:
+    """Ask a yes/no question until the operator enters a valid response."""
+    suffix = "[Y/n]" if default else "[y/N]"
+    while True:
+        answer = input(f"{question} {suffix} ").strip().lower()
+        if not answer:
+            return default
+        if answer in {"y", "yes"}:
+            return True
+        if answer in {"n", "no"}:
+            return False
+        print("Please enter y or n.")
+
+
+def run_model(
+    paths: dict[str, Path],
+    sample_csv: Path,
+    baseline_csv: Path | None,
+    args: argparse.Namespace,
+    *,
+    latest_window: bool,
+) -> dict[str, Any]:
+    command = [
+        sys.executable,
+        str(paths["test_script"]),
+        "--model",
+        str(paths["model"]),
+        "--input-csv",
+        str(sample_csv),
+        "--output-json",
+        str(paths["result"]),
+        "--confidence-threshold",
+        str(args.confidence_threshold),
+    ]
+    if latest_window:
+        # The improved model was trained on one median vector per recording.
+        # For live data, aggregate all windows in the currently available
+        # recording prefix instead of using only the newest window.
+        command.append("--streaming-prefix")
+    if baseline_csv is not None:
+        command += ["--baseline-csv", str(baseline_csv)]
+    if args.expected_food:
+        command += ["--expected-food", args.expected_food]
+    if args.expected_freshness:
+        command += ["--expected-freshness", args.expected_freshness]
+    completed = subprocess.run(
+        command,
+        cwd=paths["root"],
+        env=project_environment(),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    if completed.returncode:
+        raise RuntimeError(
+            f"Live model inference failed with status {completed.returncode}:\n"
+            f"{completed.stdout.strip()}"
+        )
+    with paths["result"].open("r", encoding="utf-8") as handle:
+        result = json.load(handle)
+    if not isinstance(result, dict):
+        raise ValueError("test_model.py produced an invalid JSON result")
+    return result
+
+
+def numeric(row: dict[str, str], names: tuple[str, ...]) -> float | None:
+    for name in names:
+        value = row.get(name)
+        if value in (None, ""):
+            continue
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(number):
+            return number
+    return None
+
+
+def _mean(values: list[float]) -> float | None:
+    finite = [value for value in values if math.isfinite(value)]
+    return sum(finite) / len(finite) if finite else None
+
+
+def _median(values: list[float]) -> float | None:
+    finite = sorted(value for value in values if math.isfinite(value))
+    if not finite:
+        return None
+    middle = len(finite) // 2
+    if len(finite) % 2:
+        return finite[middle]
+    return (finite[middle - 1] + finite[middle]) / 2.0
+
+
+def load_display_calibration(path: Path) -> dict[str, Any]:
+    """Load optional empirical gas calibration used only by the dashboard."""
+    if not path.is_file():
+        print(
+            f"Display calibration not found: {path}. "
+            "Concentrations without native ppm columns will be shown as '--'.",
+            file=sys.stderr,
+        )
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Invalid display calibration JSON {path}: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("Display calibration JSON must contain one object")
+    return payload
+
+
+def calibrated_ppm(
+    signal: float | None,
+    calibration: dict[str, Any] | None,
+) -> float | None:
+    """Convert a sensor signal through an empirical raw-vs-log(ppm) curve.
+
+    At least two calibration points are required. Each point must contain
+    ``raw`` and ``ppm``. Fitting log(ppm) instead of ppm gives a useful local
+    approximation for resistive gas sensors over a limited calibrated range.
+    """
+    if signal is None or not calibration:
+        return None
+    raw_points = calibration.get("points")
+    if not isinstance(raw_points, list):
+        return None
+
+    points: list[tuple[float, float]] = []
+    for item in raw_points:
+        if not isinstance(item, dict):
+            continue
+        try:
+            raw_value = float(item["raw"])
+            ppm_value = float(item["ppm"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if math.isfinite(raw_value) and math.isfinite(ppm_value) and ppm_value > 0:
+            points.append((raw_value, ppm_value))
+
+    if len(points) < 2:
+        return None
+
+    xs = [point[0] for point in points]
+    ys = [math.log(point[1]) for point in points]
+    x_mean = sum(xs) / len(xs)
+    y_mean = sum(ys) / len(ys)
+    denominator = sum((value - x_mean) ** 2 for value in xs)
+    if denominator <= 0:
+        return None
+    slope = sum(
+        (x_value - x_mean) * (y_value - y_mean)
+        for x_value, y_value in zip(xs, ys)
+    ) / denominator
+    intercept = y_mean - slope * x_mean
+
+    exponent = intercept + slope * signal
+    # Avoid overflow caused by an accidental calibration entry.
+    exponent = max(-50.0, min(50.0, exponent))
+    ppm = math.exp(exponent)
+    return ppm if math.isfinite(ppm) and ppm >= 0 else None
+
+
+def _direct_ppm(
+    rows: list[dict[str, str]],
+    names: tuple[str, ...],
+) -> float | None:
+    values = [numeric(row, names) for row in rows]
+    return _mean([value for value in values if value is not None])
+
+
+def _calibrated_metric(
+    rows: list[dict[str, str]],
+    direct_ppm_columns: tuple[str, ...],
+    calibration: dict[str, Any] | None,
+    default_source_column: str,
+) -> float | None:
+    direct = _direct_ppm(rows, direct_ppm_columns)
+    if direct is not None:
+        return direct
+
+    item = calibration if isinstance(calibration, dict) else {}
+    source_column = str(item.get("source_column", default_source_column))
+    signals = [
+        value
+        for row in rows
+        if (value := numeric(row, (source_column,))) is not None
+    ]
+    signal = _median(signals)
+    return calibrated_ppm(signal, item)
+
+
+def _select_display_tgs(
+    rows: list[dict[str, str]],
+    calibration: dict[str, Any],
+    dropped_channels: set[str],
+) -> list[dict[str, Any]]:
+    """Select the two healthiest recent TGS channels for display."""
+    tgs_calibration = calibration.get("tgs", {})
+    if not isinstance(tgs_calibration, dict):
+        tgs_calibration = {}
+
+    candidates: list[dict[str, Any]] = []
+    for priority, sensor in enumerate(TGS_NAMES):
+        raw_column = f"{sensor}_raw"
+        if raw_column in dropped_channels:
+            continue
+
+        values = [
+            value
+            for row in rows
+            if (value := numeric(row, (raw_column,))) is not None
+        ]
+        if not values:
+            continue
+
+        saturated = [
+            value
+            for value in values
+            if value <= TGS_SATURATION_LOW or value >= TGS_SATURATION_HIGH
+        ]
+        saturation_fraction = len(saturated) / len(values)
+        usable = [
+            value
+            for value in values
+            if TGS_SATURATION_LOW < value < TGS_SATURATION_HIGH
+        ]
+        if not usable or saturation_fraction > MAX_DISPLAY_SATURATION_FRACTION:
+            continue
+
+        item = tgs_calibration.get(sensor, {})
+        if not isinstance(item, dict):
+            item = {}
+        direct_ppm = _direct_ppm(
+            rows,
+            (f"{sensor}_ppm", f"{sensor}_ppm_equivalent"),
+        )
+        ppm = direct_ppm
+        if ppm is None:
+            source_column = str(item.get("source_column", raw_column))
+            source_values = [
+                value
+                for row in rows
+                if (value := numeric(row, (source_column,))) is not None
+                and (
+                    not source_column.endswith("_raw")
+                    or TGS_SATURATION_LOW < value < TGS_SATURATION_HIGH
+                )
+            ]
+            ppm = calibrated_ppm(_median(source_values), item)
+
+        candidates.append(
+            {
+                "label": str(item.get("label", sensor.upper())),
+                "ppm": ppm,
+                "raw_median": _median(usable),
+                "saturation_fraction": saturation_fraction,
+                "has_calibration": ppm is not None,
+                "priority": priority,
+            }
+        )
+
+    # Prefer calibrated channels; within that group choose the least saturated
+    # and most stable deterministic channel order.
+    candidates.sort(
+        key=lambda item: (
+            not item["has_calibration"],
+            item["saturation_fraction"],
+            item["priority"],
+        )
+    )
+    return candidates[:2]
+
+
+def sensor_summary(
+    path: Path,
+    calibration: dict[str, Any] | None = None,
+    dropped_channels: list[str] | None = None,
+) -> dict[str, Any]:
+    with path.open("r", newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))[-SUMMARY_ROWS:]
+    if not rows:
+        raise ValueError(f"Sensor CSV has no rows: {path}")
+
+    calibration = calibration or {}
+    svm41_calibration = calibration.get("svm41", {})
+    if not isinstance(svm41_calibration, dict):
+        svm41_calibration = {}
+
+    def recent_mean(names: tuple[str, ...]) -> float | None:
+        values = [numeric(row, names) for row in rows]
+        return _mean([value for value in values if value is not None])
+
+    voc_item = svm41_calibration.get("voc", {})
+    nox_item = svm41_calibration.get("nox", {})
+    if not isinstance(voc_item, dict):
+        voc_item = {}
+    if not isinstance(nox_item, dict):
+        nox_item = {}
+
+    voc_ppm = _calibrated_metric(
+        rows,
+        ("svm41_voc_ppm", "sgp41_voc_ppm", "voc_ppm"),
+        voc_item,
+        "svm41_raw_voc_ticks",
+    )
+    nox_ppm = _calibrated_metric(
+        rows,
+        ("svm41_nox_ppm", "sgp41_nox_ppm", "nox_ppm"),
+        nox_item,
+        "svm41_raw_nox_ticks",
+    )
+
+    selected_tgs = _select_display_tgs(
+        rows,
+        calibration,
+        set(dropped_channels or []),
+    )
+    while len(selected_tgs) < 2:
+        selected_tgs.append(
+            {
+                "label": f"TGS {len(selected_tgs) + 1}",
+                "ppm": None,
+                "raw_median": None,
+                "saturation_fraction": 1.0,
+            }
+        )
+
+    ppm_values = [
+        voc_ppm,
+        nox_ppm,
+        selected_tgs[0]["ppm"],
+        selected_tgs[1]["ppm"],
+    ]
+    calibrated_count = sum(value is not None for value in ppm_values)
+
+    return {
+        "temperature_c": recent_mean(
+            (
+                "svm41_temperature_c",
+                "sht45_temperature_c",
+                "bme690_temperature_c",
+            )
+        ),
+        "humidity_rh": recent_mean(
+            (
+                "svm41_relative_humidity_pct",
+                "sht45_relative_humidity_pct",
+                "bme690_relative_humidity_pct",
+            )
+        ),
+        "voc_ppm": voc_ppm,
+        "nox_ppm": nox_ppm,
+        "voc_label": str(voc_item.get("label", "VOC-EQ")),
+        "nox_label": str(nox_item.get("label", "NOx-EQ")),
+        "tgs1_label": selected_tgs[0]["label"],
+        "tgs1_ppm": selected_tgs[0]["ppm"],
+        "tgs2_label": selected_tgs[1]["label"],
+        "tgs2_ppm": selected_tgs[1]["ppm"],
+        "concentration_unit": str(calibration.get("unit", "ppm")),
+        "display_ppm_channels_ready": calibrated_count,
+        "tgs_display_diagnostics": selected_tgs,
+    }
+
+def truthy(value: Any) -> bool:
+    return str(value).strip().lower() in {"true", "1", "yes", "ok"}
+
+
+def valid_model_row_count(path: Path) -> int:
+    """Count complete rows accepted by the training-time validity filters."""
+    try:
+        with path.open("r", newline="", encoding="utf-8") as handle:
+            rows = csv.DictReader(handle)
+            count = 0
+            for row in rows:
+                if "ads7828_ok" in row and not truthy(row.get("ads7828_ok")):
+                    continue
+                if "svm41_ok" in row and not truthy(row.get("svm41_ok")):
+                    continue
+                count += 1
+            return count
+    except (OSError, csv.Error):
+        # The writer may still be creating the header; retry on the next poll.
+        return 0
+
+
+def streaming_parameters(
+    model_path: Path, requested_step: int | None
+) -> tuple[int, int]:
+    bundle = joblib.load(model_path)
+    try:
+        config = bundle["feature_config"]
+        first_prediction = int(config["minimum_warmup"]) + int(
+            config["minimum_window"]
+        )
+        model_step = int(config["step"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("Model bundle has an invalid feature_config") from exc
+    step = model_step if requested_step is None else requested_step
+    if step < 1:
+        raise ValueError("--prediction-step must be at least 1")
+    return first_prediction, step
+
+
+def make_display_state(
+    result: dict[str, Any],
+    summary: dict[str, Any],
+    *,
+    prediction_number: int = 1,
+    acquisition_complete: bool = True,
+) -> dict[str, Any]:
+    evaluation = result.get("evaluation")
+    if evaluation is not None and not evaluation["all_requested_labels_correct"]:
+        status = "TEST FAIL"
+    elif result.get("blank_like_warning", False):
+        status = "BLANK-LIKE"
+    elif result["low_confidence"]:
+        status = "LOW CONF"
+    elif evaluation is not None:
+        status = "TEST PASS"
+    else:
+        status = "OK"
+    return {
+        "food_type": str(result["food_type"]).replace("_", " ").title(),
+        "freshness_level": str(result["freshness_level"]).replace("_", " ").title(),
+        "confidence": float(result["overall_confidence"]),
+        **summary,
+        "system_status": status,
+        "updated_at": datetime.now().isoformat(timespec="seconds"),
+        "food_probabilities": result["food_probabilities"],
+        "freshness_probabilities": result["freshness_probabilities"],
+        "inference_seconds": result["inference_seconds"],
+        "evaluation": evaluation,
+        "blank_reference_probability": result.get("blank_reference_probability"),
+        "blank_like_warning": bool(result.get("blank_like_warning", False)),
+        "prediction_number": prediction_number,
+        "sample_frames_seen": result["frames"]["total_valid_frames"],
+        "window_mode": result["frames"]["prediction_mode"],
+        "acquisition_complete": acquisition_complete,
+    }
+
+
+def show_dashboard(
+    paths: dict[str, Path], args: argparse.Namespace, *, hold: bool
+) -> None:
+    require_file("CO5300 dashboard", paths["dashboard"])
+    require_file("CO5300 init file", paths["display_init"])
+    command = [
+        sys.executable,
+        str(paths["dashboard"]),
+        "--state-file", str(paths["display_state"]),
+        "--init", str(paths["display_init"]),
+        "--gpiochip", "auto",
+        "--clk", "21",
+        "--sio0", "20",
+        "--sio1", "19",
+        "--sio2", "16",
+        "--sio3", "26",
+        "--cs", "18",
+        "--rst", "25",
+        "--te", "24",
+        "--half-period-us", "5",
+        "--chunk-bytes", "1024",
+        "--once",
+    ]
+    if hold:
+        command.append("--hold")
+    if args.skip_te_check:
+        command.append("--skip-te-check")
+    stream(command, paths["root"], project_environment())
+
+
+def dashboard_command(
+    paths: dict[str, Path], args: argparse.Namespace
+) -> list[str]:
+    """Build a continuously refreshing dashboard command."""
+    command = [
+        sys.executable,
+        str(paths["dashboard"]),
+        "--state-file",
+        str(paths["display_state"]),
+        "--init",
+        str(paths["display_init"]),
+        "--gpiochip",
+        "auto",
+        "--clk",
+        "21",
+        "--sio0",
+        "20",
+        "--sio1",
+        "19",
+        "--sio2",
+        "16",
+        "--sio3",
+        "26",
+        "--cs",
+        "18",
+        "--rst",
+        "25",
+        "--te",
+        "24",
+        "--half-period-us",
+        "5",
+        "--chunk-bytes",
+        "1024",
+        "--refresh-seconds",
+        "0.5",
+    ]
+    if args.skip_te_check:
+        command.append("--skip-te-check")
+    return command
+
+
+def start_dashboard(
+    paths: dict[str, Path], args: argparse.Namespace
+) -> subprocess.Popen[str]:
+    """Start one dashboard process that watches display_state.json."""
+    require_file("CO5300 dashboard", paths["dashboard"])
+    require_file("CO5300 init file", paths["display_init"])
+    command = dashboard_command(paths, args)
+    print("\nStarting continuously refreshing CO5300 dashboard...", flush=True)
+    return subprocess.Popen(
+        command,
+        cwd=paths["root"],
+        env=project_environment(),
+        text=True,
+    )
+
+
+def stop_dashboard(process: subprocess.Popen[str] | None) -> None:
+    if process is None or process.poll() is not None:
+        return
+    process.terminate()
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+
+
+def publish_live_prediction(
+    paths: dict[str, Path],
+    sample: Path,
+    baseline: Path | None,
+    args: argparse.Namespace,
+    prediction_number: int,
+    *,
+    acquisition_complete: bool,
+) -> dict[str, Any]:
+    result = run_model(
+        paths,
+        sample,
+        baseline,
+        args,
+        latest_window=True,
+    )
+    state = make_display_state(
+        result,
+        sensor_summary(
+            sample,
+            args.display_calibration_data,
+            result.get("dropped_training_channels", []),
+        ),
+        prediction_number=prediction_number,
+        acquisition_complete=acquisition_complete,
+    )
+    atomic_json(paths["display_state"], state)
+    frames_seen = result["frames"]["total_valid_frames"]
+    print(
+        f"\n[LIVE {prediction_number}] frames={frames_seen} | "
+        f"food={result['food_type']} ({result['food_confidence']:.1%}) | "
+        f"freshness={result['freshness_level']} "
+        f"({result['freshness_confidence']:.1%}) | "
+        f"blank_ref={result.get('blank_reference_probability', 0.0):.1%}",
+        flush=True,
+    )
+    return result
+
+
+def acquire_with_live_predictions(
+    paths: dict[str, Path],
+    frames: int,
+    baseline: Path | None,
+    args: argparse.Namespace,
+) -> tuple[Path, dict[str, Any], int]:
+    first_prediction, prediction_step = streaming_parameters(
+        paths["model"], args.prediction_step
+    )
+    if frames < first_prediction:
+        raise ValueError(
+            f"--frames={frames} is too short for live prediction; need at least "
+            f"{first_prediction} valid frames"
+        )
+
+    acquisition_root = paths["acquisition_root"]
+    output_dir = acquisition_output_dir(paths["config"], acquisition_root)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    before = set(output_dir.glob("*.csv"))
+    command = acquisition_command(paths, frames, args.uart_device)
+    print("\n$ " + " ".join(command), flush=True)
+    process = subprocess.Popen(
+        command,
+        cwd=acquisition_root,
+        env=project_environment(acquisition_root),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+    output_lines: list[str] = []
+
+    def read_output() -> None:
+        assert process.stdout is not None
+        for line in process.stdout:
+            print(line, end="")
+            output_lines.append(line.rstrip("\n"))
+
+    reader = threading.Thread(target=read_output, daemon=True)
+    reader.start()
+    sample: Path | None = None
+    last_successful_rows = -1
+    last_attempted_rows = -1
+    prediction_number = 0
+    latest_result: dict[str, Any] | None = None
+
+    print(
+        f"Recording-prefix prediction starts at {first_prediction} valid frames and refreshes "
+        f"every {prediction_step} new valid frame(s).",
+        flush=True,
+    )
+    try:
+        while process.poll() is None:
+            if sample is None:
+                sample = find_live_csv(
+                    output_lines, output_dir, before, paths["root"]
+                )
+            if sample is not None:
+                valid_rows = valid_model_row_count(sample)
+                ready = valid_rows >= first_prediction
+                moved = (
+                    last_successful_rows < 0
+                    or valid_rows - last_successful_rows >= prediction_step
+                )
+                not_retried_same_file = valid_rows != last_attempted_rows
+                if ready and moved and not_retried_same_file:
+                    last_attempted_rows = valid_rows
+                    try:
+                        prediction_number += 1
+                        latest_result = publish_live_prediction(
+                            paths,
+                            sample,
+                            baseline,
+                            args,
+                            prediction_number,
+                            acquisition_complete=False,
+                        )
+                        # Acquisition continues while inference runs, so the
+                        # model may have consumed more rows than were present
+                        # at the trigger check.
+                        last_successful_rows = int(
+                            latest_result["frames"]["total_valid_frames"]
+                        )
+                    except RuntimeError as error:
+                        prediction_number -= 1
+                        print(f"\nLive prediction postponed: {error}", file=sys.stderr)
+            time.sleep(0.5)
+
+        reader.join(timeout=5.0)
+        if process.returncode:
+            raise RuntimeError(
+                f"Sensor acquisition failed with status {process.returncode}"
+            )
+        if sample is None:
+            sample = find_acquired_csv(
+                output_lines, output_dir, before, acquisition_root
+            )
+
+        final_valid_rows = valid_model_row_count(sample)
+        if final_valid_rows < first_prediction:
+            raise ValueError(
+                f"Only {final_valid_rows} valid frames were recorded; need "
+                f"{first_prediction} for the first prediction"
+            )
+        if latest_result is None or final_valid_rows != last_successful_rows:
+            prediction_number += 1
+            latest_result = publish_live_prediction(
+                paths,
+                sample,
+                baseline,
+                args,
+                prediction_number,
+                acquisition_complete=True,
+            )
+        else:
+            # Mark the last already-displayed prediction as complete without
+            # re-running the same window.
+            state = make_display_state(
+                latest_result,
+                sensor_summary(
+            sample,
+            args.display_calibration_data,
+            result.get("dropped_training_channels", []),
+        ),
+                prediction_number=prediction_number,
+                acquisition_complete=True,
+            )
+            atomic_json(paths["display_state"], state)
+        return sample, latest_result, prediction_number
+    except BaseException:
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+        raise
+
+
+def print_result(result: dict[str, Any], sample: Path, baseline: Path | None) -> None:
+    print("\n" + "=" * 72)
+    print("E-NOSE CLASSIFICATION RESULT")
+    print("=" * 72)
+    print(f"Sample CSV       : {sample}")
+    print(f"Baseline CSV     : {baseline or 'not used'}")
+    print(f"Food type        : {result['food_type']} ({result['food_confidence']:.1%})")
+    print(f"Freshness        : {result['freshness_level']} ({result['freshness_confidence']:.1%})")
+    print(f"Overall confidence: {result['overall_confidence']:.1%}")
+    print(f"Blank reference   : {result.get('blank_reference_probability', 0.0):.1%}")
+    print(f"Blank-like warning: {result.get('blank_like_warning', False)}")
+    print(f"Inference time   : {result['inference_seconds']:.3f} s")
+    if result.get("evaluation"):
+        outcome = "PASS" if result["evaluation"]["all_requested_labels_correct"] else "FAIL"
+        print(f"Known-label test : {outcome}")
+
+
+def main() -> int:
+    args = build_parser().parse_args()
+    paths = resolve_paths(args.project_root)
+    calibration_path = (
+        args.display_calibration.expanduser().resolve()
+        if args.display_calibration
+        else paths["display_calibration"]
+    )
+    args.display_calibration_data = load_display_calibration(calibration_path)
+    print(f"Display calibration: {calibration_path}")
+    require_file("test script", paths["test_script"])
+    require_file("trained model", paths["model"])
+    dashboard_process: subprocess.Popen[str] | None = None
+
+    try:
+        if args.input_csv:
+            sample = args.input_csv.expanduser().resolve()
+            require_file("input CSV", sample)
+            if args.baseline_csv:
+                baseline = args.baseline_csv.expanduser().resolve()
+                require_file("baseline CSV", baseline)
+            else:
+                # The improved deployed model uses absolute recording-level
+                # features, so an existing CSV can be tested without a baseline.
+                baseline = None
+            result = run_model(
+                paths,
+                sample,
+                baseline,
+                args,
+                latest_window=True,
+            )
+            prediction_count = 1
+            state = make_display_state(
+                result,
+                sensor_summary(
+            sample,
+            args.display_calibration_data,
+            result.get("dropped_training_channels", []),
+        ),
+                prediction_number=prediction_count,
+                acquisition_complete=True,
+            )
+            atomic_json(paths["display_state"], state)
+            if (
+                not args.no_display
+                and (
+                    dashboard_process is None
+                    or dashboard_process.poll() is not None
+                )
+            ):
+                show_dashboard(paths, args, hold=not args.no_hold)
+        else:
+            if args.baseline_csv:
+                raise ValueError("--baseline-csv is only used with --input-csv")
+            if args.acquisition_root is None:
+                raise ValueError(
+                    "--acquisition-root is required for live collection; "
+                    "it must point to a checkout of the acquisition branch"
+                )
+            acquisition_root = args.acquisition_root.expanduser().resolve()
+            paths["acquisition_root"] = acquisition_root
+            paths["config"] = acquisition_root / "config" / "rpi5.toml"
+            require_file("acquisition config", paths["config"])
+            args.uart_device = resolve_uart_device(args.uart)
+            print(f"SVM41 UART      : {args.uart_device}")
+
+            if args.collect_baseline:
+                use_baseline = True
+            elif args.no_baseline or args.yes:
+                # The improved model selected absolute recording-level features.
+                # In unattended mode, do not spend an extra acquisition on a
+                # baseline unless --collect-baseline was explicitly requested.
+                use_baseline = False
+            else:
+                use_baseline = prompt_yes_no(
+                    "Collect an optional diagnostic baseline?",
+                    default=False,
+                )
+
+            if not args.no_display:
+                initial_state = (
+                    status_display_state("Clean Air", "Baseline", "BASELINE")
+                    if use_baseline
+                    else status_display_state("Insert Food", "Ready", "READY")
+                )
+                atomic_json(paths["display_state"], initial_state)
+                dashboard_process = start_dashboard(paths, args)
+
+            if not use_baseline:
+                baseline = None
+                print("Baseline skipped; the improved absolute recording-level model will be used.")
+            else:
+                if not args.yes:
+                    input("\nPrepare clean air and press Enter to collect the baseline...")
+                baseline = acquire(
+                    paths,
+                    args.baseline_frames,
+                    args.uart_device,
+                )
+
+            if not args.no_display:
+                atomic_json(
+                    paths["display_state"],
+                    status_display_state("Insert Food", "Ready", "READY"),
+                )
+            if not args.yes:
+                input("\nInsert the food sample and press Enter to start live prediction...")
+
+            if not args.no_display:
+                atomic_json(
+                    paths["display_state"],
+                    status_display_state("Collecting", "Waiting", "SAMPLING"),
+                )
+            sample, result, prediction_count = acquire_with_live_predictions(
+                paths,
+                args.frames,
+                baseline,
+                args,
+            )
+
+        print_result(result, sample, baseline)
+        print(f"Live predictions  : {prediction_count}")
+        print(f"Result JSON      : {paths['result']}")
+        print(f"Display state    : {paths['display_state']}")
+
+        if dashboard_process is not None and not args.no_hold:
+            print("Final result is on the display. Press Ctrl+C to exit.")
+            dashboard_process.wait()
+            dashboard_process = None
+        return 0
+    except KeyboardInterrupt:
+        print("\nStopped by user.")
+        return 130
+    except Exception as error:
+        print(f"\nERROR: {error}", file=sys.stderr)
+        try:
+            atomic_json(
+                paths["display_state"],
+                {
+                    "food_type": "Unknown",
+                    "freshness_level": "Unknown",
+                    "confidence": 0.0,
+                    "system_status": "ERROR",
+                    "error_message": str(error),
+                    "updated_at": datetime.now().isoformat(timespec="seconds"),
+                },
+            )
+            if (
+                not args.no_display
+                and (
+                    dashboard_process is None
+                    or dashboard_process.poll() is not None
+                )
+            ):
+                show_dashboard(paths, args, hold=not args.no_hold)
+        except Exception as display_error:
+            print(f"Could not update display: {display_error}", file=sys.stderr)
+        return 1
+    finally:
+        stop_dashboard(dashboard_process)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

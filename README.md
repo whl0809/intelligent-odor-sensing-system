@@ -1,99 +1,121 @@
-# Bosch E-nose acquisition
+# ECE450 food-classification model
 
-Small, synchronous Python 3.11 application for acquiring the two E-nose
-prototype boards at 1 Hz on a Raspberry Pi 5.
+This branch is organized around training and testing the TGS + SVM41 food and
+freshness classifier. The maintained sensor-acquisition application lives on
+the separate acquisition branch; the old acquisition snapshot in this branch
+is retained only under `extras/legacy_acquisition/`.
 
-## Safety and wiring
+## What the model does
 
-Power each board from its own USB-C connector and connect a common ground.
-Do **not** connect Raspberry Pi 3.3 V or 5 V to either H1 header. Wire the bus
-by net name because the two H1 connectors swap SDA and SCL:
+The active model uses recordings containing six ADS7828/TGS channels and the
+SVM41 temperature, humidity, VOC Index, and NOx Index fields. Training:
 
-- Raspberry Pi GPIO2 / pin 3 -> both SDA nets
-- Raspberry Pi GPIO3 / pin 5 -> both SCL nets
-- Raspberry Pi ground -> both DGND nets
+1. removes invalid rows and the SVM41 warm-up period;
+2. treats rail-saturated TGS readings as unavailable;
+3. builds overlapping temporal windows;
+4. validates by holding out complete recording files, not random rows;
+5. trains banana-versus-meat, freshness-condition, and direct four-state
+   classifiers; and
+6. fuses the hierarchical and direct state probabilities.
 
-## Install and run
+Blank recordings are reference data, not an output class. Predictions are
+model labels and confidence scores—not calibrated gas concentrations.
+
+## Layout
+
+```text
+model/
+  enose_multitask.py    active trainer and low-level predictor
+  test_model.py         validated model-test wrapper
+  artifacts/            generated model bundle and reports
+data/
+  training/             15 labeled training recordings
+  test/                 three example test recordings
+pipeline/               optional automated test and CO5300 display workflow
+tests/                  focused train-to-test pipeline checks
+extras/
+  legacy_models/        incompatible earlier experiments
+  legacy_acquisition/   outdated local acquisition snapshot
+```
+
+## Install
 
 ```bash
-python -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install -e .
-python -m enose probe --config config/rpi5.toml
-python -m enose diagnose --config config/rpi5.toml
-python -m enose acquire --config config/rpi5.toml
-python -m enose acquire-no-sgp41-bme690-sht45 --config config/rpi5.toml
+python -m pip install --upgrade pip
+python -m pip install -e '.[test]'
 ```
 
-Use `--verbose` after the subcommand for byte-level diagnostics. A bounded
-acquisition can be run with `--frames 60`.
+The model bundle records scikit-learn 1.9.0, so the environment pins that
+version to avoid incompatible joblib deserialization.
 
-Both standard acquisition commands print every CSV field for each frame while
-writing the same frame to disk. `acquire` uses all enabled sensors on both
-PCBs. `acquire-no-sgp41-bme690-sht45` records only all six TGS/ADS7828
-channels, NH3, and H2S. It disables SGP41, BME690, and SHT45; those devices
-do not appear in that mode's terminal rows or CSV columns, and no SVM41 is
-used.
+## Train
 
-The BME690 driver uses Bosch Sensortec's official BME690 SensorAPI v1.1.0
-through a small native extension built during installation. It runs the sensor
-in forced mode with the heater settings from `config/rpi5.toml`. BME690 remains
-optional in the default configuration, so its initialization or read failures
-do not stop the other sensors.
-
-Sensirion's official `sensirion-gas-index-algorithm` package processes each
-new 1 Hz SGP41 raw sample into VOC Index and NOx Index while preserving both
-raw signals. These indices are not ppm or concentration measurements.
-
-## NH3, H2S, and SVM41 UART mode
-
-The isolated `acquire-svm41` mode records only the two existing MCP3421
-channels and a Sensirion SVM41 module:
+From the repository root:
 
 ```bash
-python -m enose acquire-svm41 \
-  --config config/rpi5.toml \
-  --uart /dev/ttyUSB0
+python model/enose_multitask.py train \
+  --data-dir data/training \
+  --output-dir model/artifacts
 ```
 
-It runs continuously at 1 Hz until Ctrl+C, prints every frame, and writes a
-timestamped `enose_nh3_h2s_svm41_*.csv` plus metadata in `data/raw/`.
-VOC Index and NOx Index are dimensionless indices, not ppm or concentration.
+This writes `model/artifacts/enose_multitask_model.joblib` plus validation
+metadata and reports. Existing generated artifacts are ignored by Git.
 
-Keep NH3 (`0x69`) and H2S (`0x6A`) on `/dev/i2c-1`. The SVM41 module also uses
-`0x6A` in I2C mode, so it must not be connected to that I2C bus. Connect the
-SVM41 through its Sensirion USB-UART cable instead:
-
-- SVM41 pin 1/red: VDD, 3.3 V or 5 V
-- SVM41 pin 2/black: GND
-- SVM41 pin 3/green: module RX
-- SVM41 pin 4/yellow: module TX
-- SVM41 pin 5/blue: SEL, leave floating or pull to VDD for UART
-- SVM41 pin 6/purple: do not connect
-
-With the provided USB-UART cable, plug the cable into the Raspberry Pi and
-confirm its device name:
+## Test a recording
 
 ```bash
-ls -l /dev/ttyUSB*
-sudo usermod -aG dialout "$USER"
+python model/test_model.py \
+  --model model/artifacts/enose_multitask_model.joblib \
+  --input-csv data/test/test1.csv \
+  --output-json results/test1_prediction.json \
+  --no-figures
 ```
 
-Log out and back in after changing group membership. If Linux assigns a
-different serial path, pass that path with `--uart`. Install the new official
-driver dependency after pulling this change:
+Optional expected labels turn the command into a known-label check:
 
 ```bash
-source .venv/bin/activate
-python -m pip install -e .
+python model/test_model.py \
+  --input-csv data/test/test1.csv \
+  --expected-food meat \
+  --expected-freshness fresh
 ```
 
-If the Raspberry Pi's configured piwheels mirror times out, install from PyPI
-without the global pip configuration:
+See [model/README.md](model/README.md) for the model contract and inference
+options.
+
+## Automated pipeline and display
+
+Classify an existing CSV without touching acquisition hardware or the display:
 
 ```bash
-PIP_CONFIG_FILE=/dev/null \
-PIP_INDEX_URL=https://pypi.org/simple \
-PIP_DEFAULT_TIMEOUT=120 \
-python -m pip install -e .
+python pipeline/run_model_pipeline.py \
+  --input-csv data/test/test1.csv \
+  --no-display
 ```
+
+For live acquisition, provide a separate checkout of the acquisition branch:
+
+```bash
+python pipeline/run_model_pipeline.py \
+  --acquisition-root ../ECE450_acquisition \
+  --uart /dev/ttyUSB0 \
+  --frames 120 \
+  --no-display
+```
+
+The pipeline calls that checkout's unified acquisition command with
+`--sensors tgs,svm41`; it does not use the archived acquisition code in this
+branch. Display setup is documented in [pipeline/README.md](pipeline/README.md).
+
+## Validate the branch
+
+```bash
+python -m pytest
+```
+
+The focused integration test trains into a temporary directory and then runs
+the matching test wrapper on an included recording. Current validation is
+recording-level but still based on a small dataset, so reported accuracy and
+confidence must not be treated as production performance.

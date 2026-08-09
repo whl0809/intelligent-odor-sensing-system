@@ -1,8 +1,10 @@
 .venv/
 __pycache__/
 .pytest_cache/
-tmp/
-src/*.egg-info/
 *.py[cod]
-data/raw/*.csv
-data/raw/*.json
+
+model/artifacts/*
+!model/artifacts/.gitkeep
+results/
+runtime/
+tmp/
