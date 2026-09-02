@@ -1,6 +1,6 @@
 # Bosch E-nose acquisition
 
-Small, synchronous Python 3.11 application for acquiring the two E-nose
+Synchronous Python 3.11 application for acquiring the two E-nose
 prototype boards at 1 Hz on a Raspberry Pi 5.
 
 ## Safety and wiring
