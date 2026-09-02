@@ -35,7 +35,7 @@ channels, NH3, and H2S. It disables SGP41, BME690, and SHT45; those devices
 do not appear in that mode's terminal rows or CSV columns, and no SVM41 is
 used.
 
-## Four-state hard-code demonstration
+## Four-state demonstration
 
 For the current eight labeled food recordings, use the transparent rule-based
 command instead of the generalization model:
